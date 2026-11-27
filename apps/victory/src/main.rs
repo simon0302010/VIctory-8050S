@@ -151,8 +151,10 @@ enum Command {
         /// Actually start the title. Without it, stop after binding.
         #[arg(long)]
         execute: bool,
-        /// The console model the title sees (device type, memory).
-        #[arg(long, value_enum, default_value_t = Console::SeriesX)]
+        /// The console model the title sees (device type, memory). Series S
+        /// unless told: this fork targets the Radeon 8050S, whose budget
+        /// is closer to it.
+        #[arg(long, value_enum, default_value_t = Console::SeriesS)]
         console: Console,
         /// Arguments for the title, after `--` (it reads the whole command
         /// line; a title that relaunches itself passes some).
