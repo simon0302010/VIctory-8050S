@@ -103,6 +103,15 @@ What was found on the way, measured:
   13.7% of the CPU time in our code, the five recording threads fighting over
   one cache line. `crates/victory-gpu/src/fast_local.rs` reads the TEB slot
   directly.
+- **Missing heads**: most characters were drawn without a head (hair, eyes
+  and teeth floating). Skipping four compute programs that write 16-bit
+  integer buffers before the scene pass brings them back
+  (`VICTORY_SKIP_PIPELINES`, a Linux default for now; faces probably lose
+  their expressions). What those programs compute wrong here is still to be
+  found.
+- **Indirect light**: with ray tracing off, rooms and faces had only direct
+  light; `VICTORY_AMBIENT=1` (the stand-in estimated from the frame) is a
+  Linux default now.
 - **Wine's `memcmp`** (ucrtbase) compares eight bytes a step, and Rust's
   slice compares on windows-gnu call it; `apps/victory/src/fastmem.rs`
   defines an AVX2 one for the executable (0.16 of a core in the profile).

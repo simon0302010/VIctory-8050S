@@ -191,7 +191,7 @@ enum Console {
 /// the median frame (linux/bench-scene.sh). `VICTORY_LINUX_DEFAULTS=0` leaves
 /// everything as upstream has it.
 #[cfg(windows)]
-const LINUX_DEFAULTS: [(&str, &str); 10] = [
+const LINUX_DEFAULTS: [(&str, &str); 11] = [
     // Title buffers of 1 MiB or more get copies in the card's memory, whose
     // changes the card itself finds (the compare, which Wine could not make
     // before): snapshots and CPU compares of what shaders wrote, 24 ms and
@@ -220,6 +220,15 @@ const LINUX_DEFAULTS: [(&str, &str); 10] = [
     // direct light, black wherever no lamp or sun reaches. Screenshots
     // with and without, intro scene (2026-11-27); the user: "way better".
     ("VICTORY_AMBIENT", "1"),
+    // Workaround, diagnostics builds only (`pipeline::is_skipped`): four
+    // compute programs that write R16G16B16A16_UINT buffers before the
+    // scene pass (6a04b371 ~90 dispatches a frame on a 24 MB buffer, and
+    // 164a8fa9, 13c8daa0, da2fdff4, likely the face network or the head
+    // morphs) are skipped. With them most characters had no head (hair,
+    // eyes and teeth floating); without them the heads are drawn (user,
+    // 2026-11-28), presumably in their rest shape. Their output on this
+    // stack is the bug still to find.
+    ("VICTORY_SKIP_PIPELINES", "6a04b371a8e26853,164a8fa92a2c699f,13c8daa0bad76f2a,da2fdff4709c3189"),
     ("VICTORY_MAP_THREADS", "1"),
     ("VICTORY_TEXTURE_NO_WAIT", "1"),
 ];

@@ -43,7 +43,7 @@ decided, update the relevant section here **and** the README, then commit.
 | Upstream sources for reference/building | `/home/simon/Dokumente/Rust/victory/upstream-src/` : `vkd3d-proton` (at cae8353e), `proton-wine` (ValveSoftware proton_11.0, sparse), `ge-proton` (GE-Proton11-14 tag with `wine`, `wine-staging`, `wineopenxr` submodules; `build-server/` holds our wineserver build) |
 | cool_fox (source of the 5 cherry-picked commits) | `https://github.com/DoubleGhosty/cool_fox` |
 
-Linux defaults now include `VICTORY_PORT_CONSTANTS=0` (port 1 off) and `VICTORY_CARD_STEPS=1`. Compare runs by the median of the last 9 frame lines (streamed in); the first lines are loading.
+Linux defaults now include `VICTORY_PORT_CONSTANTS=0` (port 1 off), `VICTORY_CARD_STEPS=1`, `VICTORY_AMBIENT=1` and the four-shader `VICTORY_SKIP_PIPELINES` (heads workaround, see 7c). Compare runs by the median of the last 9 frame lines (streamed in); the first lines are loading.
 
 Current sandbox settings: `repo` = this checkout, `proton` = the `-victory`
 copy, `build_args = -p victory --features diagnostics` (needed for
@@ -301,6 +301,29 @@ Unknown: which pipelines are the face network (`compute_graph_ops:*` inside
 the title's .rpf archives; our logs have only hashes) and whether they run.
 Test-suite note: `emit::tests::stub_pipeline_is_created` fails under
 vkd3d-proton (it does not check DXIL hashes) — not a regression.
+
+**Heads found (2026-11-28):** skipping four compute programs brings the
+heads back (user, in game): `VICTORY_SKIP_PIPELINES=6a04b371a8e26853,
+164a8fa92a2c699f,13c8daa0bad76f2a,da2fdff4709c3189` (now a Linux default;
+only diagnostics builds honour it). They write R16G16B16A16_UINT buffers
+before the scene pass: 6a04b371 ~90 dispatches/frame (mostly 1x1x1 and
+8x1x1, one per character?) into a 24 MB buffer (table UAV u4, title
+0xc6d8e0000+0x1800000, plus an R16G16B16A16_FLOAT view u6, and a constant
+u5 stepping by 242 per dispatch — not a heap index, the ops file's
+"[heap n: null]" for it is meaningless); 164a8fa9/13c8daa0/da2fdff4 100x1x1
+on a ~800 KB R16G16B16A16_UINT UAV. Likely the face network / head morphs
+whose output the head's mesh shader adds; their output on our stack is
+garbage (NaN or huge offsets → head invisible). The skip is a workaround:
+faces likely lose expressions. Next: find what is wrong in these programs'
+translation or inputs — e.g. dump their UAV after a frame (compare with
+what upstream's 4243a96a describes), check their d16/typed accesses and
+wave ops (wave.rs mentions `CS_TransposeVecMatMulAlignedOperation`'s
+WaveActiveSum of halves), and whether they read title memory our refresh
+leaves stale. How it was found: frame-1036-ops.txt of shots-warmbad, the
+scene pass is all mesh shaders; grep the ops for views of format 12/57.
+
+Still open in the picture: odd lighting, black noise on textures/floors,
+black triangles/planes blinking, checkerboard/comb artifacts.
 
 ## 8. Plan (agreed direction: playable 30 fps first, then picture)
 
