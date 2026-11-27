@@ -181,8 +181,49 @@ enum Console {
     SeriesS,
 }
 
+/// This fork's defaults under Wine (Linux, Proton): switches the user did not
+/// set, set before any part of the runtime reads them. On a Radeon 8050S under
+/// GE-Proton the renderer patches cut the frame, port 1 needs the userptr shim
+/// (linux/userptr-shim), and while wineserver walks its view list on every map
+/// one mapping thread and texture refreshes that do not wait for remaps halve
+/// the median frame (linux/bench-scene.sh). `VICTORY_LINUX_DEFAULTS=0` leaves
+/// everything as upstream has it.
+#[cfg(windows)]
+const LINUX_DEFAULTS: [(&str, &str); 7] = [
+    ("VICTORY_PORT_CONSTANTS", "1"),
+    ("VICTORY_PORT_DESCRIPTORS", "1"),
+    ("VICTORY_PORT_CBV", "1"),
+    ("VICTORY_PORT_GUARD", "1"),
+    ("VICTORY_PORT_JOURNAL", "1"),
+    ("VICTORY_MAP_THREADS", "1"),
+    ("VICTORY_TEXTURE_NO_WAIT", "1"),
+];
+
+/// Sets [`LINUX_DEFAULTS`] that are unset, under Wine; returns those set.
+#[cfg(windows)]
+fn linux_defaults() -> Vec<&'static str> {
+    if !victory_hle::wine::on() || std::env::var("VICTORY_LINUX_DEFAULTS").is_ok_and(|v| v.trim() == "0") {
+        return Vec::new();
+    }
+    let mut set = Vec::new();
+    for (name, value) in LINUX_DEFAULTS {
+        if std::env::var_os(name).is_none() {
+            // SAFETY: the first thing `main` does, before any other thread.
+            unsafe { std::env::set_var(name, value) };
+            set.push(name);
+        }
+    }
+    set
+}
+
 fn main() -> Result<()> {
+    #[cfg(windows)]
+    let defaults = linux_defaults();
     victory_core::logging::init("info");
+    #[cfg(windows)]
+    if !defaults.is_empty() {
+        tracing::info!(switches = ?defaults, "this fork's Linux defaults (VICTORY_LINUX_DEFAULTS=0: none)");
+    }
     // The audio recorder `run` starts for `VICTORY_AUDIO_CAPTURE`.
     #[cfg(all(windows, feature = "diagnostics"))]
     if victory_hle::modules::audio::capture::child() {
