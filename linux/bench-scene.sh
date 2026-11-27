@@ -6,6 +6,7 @@
 # the environment, e.g.:
 #
 #   VICTORY_MAP_THREADS=1 linux/bench-scene.sh map1
+#   BENCH_RUN_ARGS=--rt linux/bench-scene.sh rt   (more arguments for `victory-sandbox run`)
 #
 # Usage: bench-scene.sh <label> [lines]   (lines: 10 unless given)
 set -u
@@ -17,7 +18,7 @@ keys=$(seq 10 5 200 | sed 's/$/:Enter/' | paste -sd,)
 
 # (The renderer patches come from victory's Linux defaults, apps/victory/src/main.rs.)
 
-VICTORY_KEYS=$keys timeout 600 victory-sandbox run --no-audio >/dev/null 2>&1 &
+VICTORY_KEYS=$keys timeout 600 victory-sandbox run --no-audio ${BENCH_RUN_ARGS:-} >/dev/null 2>&1 &
 runner=$!
 
 in_game() { grep -cE 'INFO.*victory_gpu::host.* fps, .* [0-9]{3,} draws/frame' "$1" 2>/dev/null; true; }
