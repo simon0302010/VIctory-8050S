@@ -189,7 +189,7 @@ enum Console {
 /// the median frame (linux/bench-scene.sh). `VICTORY_LINUX_DEFAULTS=0` leaves
 /// everything as upstream has it.
 #[cfg(windows)]
-const LINUX_DEFAULTS: [(&str, &str); 8] = [
+const LINUX_DEFAULTS: [(&str, &str); 9] = [
     // Title buffers of 1 MiB or more get copies in the card's memory, whose
     // changes the card itself finds (the compare, which Wine could not make
     // before): snapshots and CPU compares of what shaders wrote, 24 ms and
@@ -207,6 +207,12 @@ const LINUX_DEFAULTS: [(&str, &str); 8] = [
     ("VICTORY_PORT_CBV", "1"),
     ("VICTORY_PORT_GUARD", "1"),
     ("VICTORY_PORT_JOURNAL", "1"),
+    // Fills of constant buffers that read what flights in the air may
+    // write are done on the card, in the flights' order, instead of the
+    // submitting thread waiting for the flights (~5 settles, 30-38 ms of
+    // waiting a frame): medians of the streamed-in frames 67-70 ms against
+    // 78-80 (2 runs each, 2026-11-27).
+    ("VICTORY_CARD_STEPS", "1"),
     ("VICTORY_MAP_THREADS", "1"),
     ("VICTORY_TEXTURE_NO_WAIT", "1"),
 ];

@@ -43,7 +43,7 @@ decided, update the relevant section here **and** the README, then commit.
 | Upstream sources for reference/building | `/home/simon/Dokumente/Rust/victory/upstream-src/` : `vkd3d-proton` (at cae8353e), `proton-wine` (ValveSoftware proton_11.0, sparse), `ge-proton` (GE-Proton11-14 tag with `wine`, `wine-staging`, `wineopenxr` submodules; `build-server/` holds our wineserver build) |
 | cool_fox (source of the 5 cherry-picked commits) | `https://github.com/DoubleGhosty/cool_fox` |
 
-Linux defaults now include `VICTORY_PORT_CONSTANTS=0` (port 1 off).
+Linux defaults now include `VICTORY_PORT_CONSTANTS=0` (port 1 off) and `VICTORY_CARD_STEPS=1`. Compare runs by the median of the last 9 frame lines (streamed in); the first lines are loading.
 
 Current sandbox settings: `repo` = this checkout, `proton` = the `-victory`
 copy, `build_args = -p victory --features diagnostics` (needed for
@@ -122,7 +122,8 @@ victory-sandbox repo: `e1626b1` original, `e26e367` builds/preloads the shim.
 | + MAP_THREADS=1, TEXTURE_NO_WAIT=1 | 289-435 |
 | + patched wineserver | 94-103 (those two switches then irrelevant: 99-103 either way) |
 | + card compare + CARD_BUFFERS_MIN_MB=1 | 76-122 (3 runs); 55-80 steady after streaming, up to 18 fps |
-| + port 1 off, fast_local | **73-79** (5 runs), means 77-94, no post-load stall |
+| + port 1 off, fast_local | 73-79 (5 runs), means 77-94, no post-load stall |
+| + `VICTORY_CARD_STEPS=1` | **67-70** streamed-in median (78-80 without), 0 settles |
 
 Micro: Wine view map with 1k/65k views: 25/210 µs before, 15/8.4 µs after patch; unmap+map at 65k: 506 → 9.9 µs. In game before: ~2,240 maps/s, ~1,100 unmaps/s at ~2.3/1.5 ms each; wineserver at 92% of a core.
 

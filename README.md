@@ -64,7 +64,8 @@ more (several runs each: the scene streams, runs differ):
 | + one mapping thread, texture refreshes that do not wait for remaps | 289-435 | this fork's defaults under Wine |
 | + **patched wineserver** | 94-103 | about 10 fps |
 | + card compare fixed for Wine, `VICTORY_CARD_BUFFERS_MIN_MB=1` | **76-122** (3 runs) | 8-13 fps; one 6 s stall right after the world loads in one run |
-| + renderer port 1 off, thread-locals without std's guard (`fast_local`) | **73-79** (5 runs; means 77-94) | ~13 fps; no stall after loading (with port 1: means 153-356, 0.3-1.3 s frames in 4 of 4 runs) |
+| + renderer port 1 off, thread-locals without std's guard (`fast_local`) | 73-79 (5 runs; means 77-94) | ~13 fps; no stall after loading (with port 1: means 153-356, 0.3-1.3 s frames in 4 of 4 runs) |
+| + constant-buffer fills done on the card (`VICTORY_CARD_STEPS=1`) | **67-70** (streamed-in median, 2 runs; 78-80 before) | ~15 fps; the submitting thread no longer waits for flights (30-38 ms a frame before) |
 
 Where a frame goes now (frame lines, once the world has streamed in: 55-80
 ms, up to 18 fps): the card is busy about 63% of a frame (~35 ms); of the
