@@ -124,6 +124,18 @@ Micro: Wine view map with 1k/65k views: 25/210 µs before, 15/8.4 µs after patc
 
 Current breakdown of a ~55 ms frame: card busy ~63% (~35 ms, title rendering + our uploads/compare passes); card idle ~21 ms = ~16 ms our submitting thread preparing (refreshes ~14 ms) + ~5 ms title not submitting; submitting thread waits ~17 ms/frame for the card; relay (copy-back) ~20 ms on its own thread; ~2,550 dispatches/frame dropped (ray-tracing structure builder off). Most runs: one 3-6 s stall right after the world loads ("on the GPU" and "copying back" both ~5.7 s); no amdgpu fault in dmesg.
 
+**Step 1 result (GPU timing, 2026-11-27, commit `271685b`):** with
+`VICTORY_GPU_TIMING=1 VICTORY_D3D12_DRED=1` each group of lists runs alone
+between two timestamp lists (`stamps::bracket`); copystat prints `the card's
+time by list (timing run), per frame, between stamps around each`. Intro
+scene: card's own work 25-33 ms/frame = title lists 21-29 ms, preludes <1 ms,
+card compares ~3 ms. Title time is flat (1,500 command kinds, none >0.45
+ms/frame; dispatch 8-10, indirect 7-11, alias copies 1.6, draws 1.5). The
+minimum send+signal round trip per list under Wine is ~270 us (timing mode's
+wall clock is thus ~75 ms/frame of overhead; its fps mean nothing). ⇒ The
+GPU is not the limit; resolution/FSR (step 5) is not worth it now. Go to
+step 2/3 (waits, CPU copying).
+
 Negative results (keep, do not retry blindly):
 - Copy-mapping the page pool instead of Wine views: impossible, 96% of mapped pages are aliases (shown elsewhere already; the title maps pages into a pool view and the GPU's `CopyPageMappings` aliases them into tiled heaps).
 - `VICTORY_INPLACE=1` alone: 356 MB in place, no fps change (most memory is page pool = view memory, which `inplace` refuses).
@@ -152,7 +164,7 @@ Negative results (keep, do not retry blindly):
 
 Next steps in order; the user asked to start with step 1 when resuming.
 
-1. **Measure the GPU's ~35 ms.** Use the GPU timing mode (`VICTORY_GPU_TIMING`; note it forces late wait off, see `late_stage`) or a capture to split title rendering vs our own passes (uploads of card copies ~45 MB/frame, compare passes, texture uploads, ambient/compose). The 8050S has ~2.5× the Series S's compute at similar bandwidth, so the title's own rendering should fit well under 33 ms; if not, look at translated shader cost. This decides whether resolution scale / FSR is worth anything.
+1. ~~**Measure the GPU's ~35 ms.**~~ Done, see the step 1 result in section 6: 25-33 ms, title 21-29. Use the GPU timing mode (`VICTORY_GPU_TIMING`; note it forces late wait off, see `late_stage`) or a capture to split title rendering vs our own passes (uploads of card copies ~45 MB/frame, compare passes, texture uploads, ambient/compose). The 8050S has ~2.5× the Series S's compute at similar bandwidth, so the title's own rendering should fit well under 33 ms; if not, look at translated shader cost. This decides whether resolution scale / FSR is worth anything.
 2. **Overlap CPU and GPU.** Today preparing (~16 ms idle card), submitting and waiting (~17 ms) are serialized. Goal: frame ≈ max(GPU, CPU) ≈ 35-40 ms. Look at the late-wait/relay machinery (`host.rs` `late_stage`, flights, settles, "waits for every earlier shader write", "submissions sent ahead") for what forces the 17 ms of waits.
 3. **Cut CPU copying**: refreshes ~14 ms, relay ~20 ms, the 3.6 GB/frame "watches checked" (mostly unchanged). Structural fix: make in-place work under Wine without the GPU slowdown: confirm the mprotect/userptr-notifier hypothesis (ask the user for `sudo sysctl kernel.perf_event_paranoid=-1`, then `perf record -a -e 'amdgpu:*'` / count `mprotect` + `amdgpu_mn_*`), then keep in-place memory out of write watching/guards entirely (it needs neither), or patch Wine's write-watch to not re-protect such ranges.
 4. **The post-load stall** (task): find what the card and relay wait 5.7 s for (log around it, `VKD3D_DEBUG=warn`, RADV_DEBUG hang detection off by default; check pipelines made at that moment, huge copies: one run showed 1.8 GB of copies in the first world frame).

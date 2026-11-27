@@ -73,6 +73,18 @@ submitting thread also waits ~17 ms a frame for the card. Right after the
 world loads, most runs have one stall of several seconds (the card and the
 copy-back thread waiting; no GPU fault in the kernel log): next to look at.
 
+**What the card itself does in a frame** (`VICTORY_GPU_TIMING=1
+VICTORY_D3D12_DRED=1`, diagnostics build; each list goes alone between two
+timestamps, 3 frame lines): **25-33 ms**, of it the title's own lists 21-29
+ms, our preludes (refreshes on the card) under 1 ms, the compares of copies in
+the card's memory about 3 ms. The title's time is spread thin: some 1,500
+kinds of commands, none over 0.45 ms a frame; dispatches 8-10 ms, indirect
+work 7-11 ms, alias copies 1.6 ms, draws 1.5 ms. So the card's work fits a
+30 fps frame already; the ~35 ms "busy" of a normal frame is that plus
+gaps between lists and memory shared with our CPU copying. Lowering the
+resolution would win little now; the frame is lost on the CPU side and in
+waits (each submission and wait for it costs at least ~270 us under Wine).
+
 What was found on the way, measured:
 
 - **Wine's view list.** The title shows its page pool through ~63,000 views
