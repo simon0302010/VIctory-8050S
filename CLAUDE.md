@@ -136,6 +136,22 @@ wall clock is thus ~75 ms/frame of overhead; its fps mean nothing). ⇒ The
 GPU is not the limit; resolution/FSR (step 5) is not worth it now. Go to
 step 2/3 (waits, CPU copying).
 
+**Step 2 result (2026-11-27):** the ~16.5 ms/frame the submitting thread
+stood waiting were ~3 settles/frame for "title memory read by a fill of
+upload memory" (small constant-buffer fills, +0x220/+0xf0/+0x340, inside
+ranges a flight's shader declares it writes). `VICTORY_FILL_TITLE=1` removes
+them (waits 16.5 → 1-2 ms, settles 3 → 0.4/frame) but frames are **not
+faster** (steady 54-86 ms); `=2` in an in-run A/B (`VICTORY_AB=10,VICTORY_FILL_TITLE`):
+medians 57-63 vs 55-65, p90 a bit lower. Not made a default (mode 1 can read
+a constant before a flight's write lands). Why no gain: **the CPU is
+saturated** — the process uses 420-600 ms CPU per 55-85 ms frame (7-8.5 of 8
+cores), and the title records on 5 threads that each spend 62-74 ms/frame
+inside our list calls (8-10k calls each, ~7 us/call, 234-343 ms/frame
+total). Frame time ≈ recording time per thread; the submitting thread is
+mostly idle (between submissions 52 ms, 4 ms of it running). ⇒ Step 3 must
+cut list-call CPU first. `VICTORY_CARD_STEPS=1/2` (the fills/copies done on
+the card) not yet tried.
+
 Negative results (keep, do not retry blindly):
 - Copy-mapping the page pool instead of Wine views: impossible, 96% of mapped pages are aliases (shown elsewhere already; the title maps pages into a pool view and the GPU's `CopyPageMappings` aliases them into tiled heaps).
 - `VICTORY_INPLACE=1` alone: 356 MB in place, no fps change (most memory is page pool = view memory, which `inplace` refuses).
@@ -165,7 +181,7 @@ Negative results (keep, do not retry blindly):
 Next steps in order; the user asked to start with step 1 when resuming.
 
 1. ~~**Measure the GPU's ~35 ms.**~~ Done, see the step 1 result in section 6: 25-33 ms, title 21-29. Use the GPU timing mode (`VICTORY_GPU_TIMING`; note it forces late wait off, see `late_stage`) or a capture to split title rendering vs our own passes (uploads of card copies ~45 MB/frame, compare passes, texture uploads, ambient/compose). The 8050S has ~2.5× the Series S's compute at similar bandwidth, so the title's own rendering should fit well under 33 ms; if not, look at translated shader cost. This decides whether resolution scale / FSR is worth anything.
-2. **Overlap CPU and GPU.** Today preparing (~16 ms idle card), submitting and waiting (~17 ms) are serialized. Goal: frame ≈ max(GPU, CPU) ≈ 35-40 ms. Look at the late-wait/relay machinery (`host.rs` `late_stage`, flights, settles, "waits for every earlier shader write", "submissions sent ahead") for what forces the 17 ms of waits.
+2. ~~**Overlap CPU and GPU.**~~ Measured, see step 2 result: the waits are removable but the CPU is saturated; recording is the critical path. Today preparing (~16 ms idle card), submitting and waiting (~17 ms) are serialized. Goal: frame ≈ max(GPU, CPU) ≈ 35-40 ms. Look at the late-wait/relay machinery (`host.rs` `late_stage`, flights, settles, "waits for every earlier shader write", "submissions sent ahead") for what forces the 17 ms of waits.
 3. **Cut CPU copying**: refreshes ~14 ms, relay ~20 ms, the 3.6 GB/frame "watches checked" (mostly unchanged). Structural fix: make in-place work under Wine without the GPU slowdown: confirm the mprotect/userptr-notifier hypothesis (ask the user for `sudo sysctl kernel.perf_event_paranoid=-1`, then `perf record -a -e 'amdgpu:*'` / count `mprotect` + `amdgpu_mn_*`), then keep in-place memory out of write watching/guards entirely (it needs neither), or patch Wine's write-watch to not re-protect such ranges.
 4. **The post-load stall** (task): find what the card and relay wait 5.7 s for (log around it, `VKD3D_DEBUG=warn`, RADV_DEBUG hang detection off by default; check pipelines made at that moment, huge copies: one run showed 1.8 GB of copies in the first world frame).
 5. **Then** resolution/upscaling if the GPU is still the limit: the Series S profile already upscales with the title's own console FidelityFX (`amd_fidelityfx_loader_xbox`, `crates/victory-loader/src/resolution.rs`, `VICTORY_FFX_SCALE`); lowering its internal scale is the cheap knob. The fork's PC FSR 4.1.2 bridge targets Series X 4K output (more GPU work) and FSR 4 needs RDNA 4 (8050S is RDNA 3.5: likely FSR 3.1 fallback). FSR 3 frame generation only as a last touch (latency).

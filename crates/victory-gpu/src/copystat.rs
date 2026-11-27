@@ -1151,6 +1151,62 @@ fn submitter(all: &mut Vec<(u32, Submitter)>, id: u32) -> &mut Submitter {
     &mut all[at].1
 }
 
+/// List-call time by the call's place in our code (`with_state`'s caller):
+/// nanoseconds and calls, summed on each thread and sent here now and then.
+type Sites = HashMap<(&'static str, u32), (u64, u64)>;
+static SITES: Mutex<Option<Sites>> = Mutex::new(None);
+
+thread_local! {
+    static SITES_HERE: std::cell::RefCell<(Sites, u64)> = std::cell::RefCell::new((HashMap::new(), 0));
+}
+
+/// As [`recorded`], and the time summed by the call's place `at`.
+pub(crate) fn recorded_at(started: std::time::Instant, at: &'static std::panic::Location<'static>) {
+    let ns = started.elapsed().as_nanos() as u64;
+    recorded(started);
+    SITES_HERE.with(|h| {
+        let mut h = h.borrow_mut();
+        let e = h.0.entry((at.file(), at.line())).or_insert((0, 0));
+        e.0 += ns;
+        e.1 += 1;
+        h.1 += ns;
+        if h.1 < 5_000_000 {
+            return;
+        }
+        h.1 = 0;
+        let mut all = SITES.lock().unwrap_or_else(|e| e.into_inner());
+        let all = all.get_or_insert_with(HashMap::new);
+        for (k, (ns, n)) in h.0.drain() {
+            let e = all.entry(k).or_insert((0, 0));
+            e.0 += ns;
+            e.1 += n;
+        }
+    });
+}
+
+/// The heaviest places of list calls since the last line.
+fn log_sites(frames: f64) {
+    let Some(all) = SITES.lock().unwrap_or_else(|e| e.into_inner()).take() else {
+        return;
+    };
+    let mut all: Vec<_> = all.into_iter().collect();
+    all.sort_by_key(|&(_, (ns, _))| std::cmp::Reverse(ns));
+    let text: Vec<String> = all
+        .iter()
+        .take(14)
+        .map(|((file, line), (ns, n))| {
+            let file = file.rsplit(['/', '\\']).next().unwrap_or(file);
+            format!(
+                "{file}:{line} {:.1} ms in {:.0} ({:.1} us each)",
+                *ns as f64 / 1e6 / frames,
+                *n as f64 / frames,
+                *ns as f64 / 1e3 / (*n).max(1) as f64
+            )
+        })
+        .collect();
+    tracing::info!("  list calls by place (all threads, per frame; summed a few ms at a time): {}", text.join(", "));
+}
+
 /// A list call on this thread that began at `started` has returned.
 pub(crate) fn recorded(started: std::time::Instant) {
     let took = started.elapsed();
@@ -1576,6 +1632,7 @@ pub(crate) fn log(frames: f64) {
         .map(|r| format!("thread {} {:.0} ms in {:.0} calls", r.0, r.1 as f64 / 1e6 / frames, r.2 as f64 / frames))
         .collect();
     tracing::info!("  list calls by thread: {} threads; {}", recorders.len(), busiest.join(", "));
+    log_sites(frames);
     log_memory();
     #[cfg(feature = "diagnostics")]
     crate::watch::alone_line(frames);
