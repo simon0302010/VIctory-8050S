@@ -176,7 +176,11 @@ hotspot at this granularity → needs a sampling profile (perf) to go
 further.
 
 **perf works** (user ran `sysctl kernel.perf_event_paranoid=-1`; resets on
-reboot). Recipe: start `linux/bench-scene.sh`, once in game `perf record -a
+reboot). Scripts: `linux/perf/record-scene.sh <dir>` (bench + 20 s `perf
+record -a`; copy `runtime/victory.exe` into `<dir>` first), `python3
+linux/perf/ours.py <dir> <dir>/victory.exe [n]` (our functions by samples),
+`python3 linux/perf/bythread.py <dir> <exe> <base hex> <comm or tid>...` (one
+thread's samples by function; base from `<dir>/maps.txt`). Recipe: start `linux/bench-scene.sh`, once in game `perf record -a
 -F 1999 -- sleep 20`, then `perf script -F comm,tid,ip,dso`. victory.exe
 is not at its preferred base (0x140000000) under Wine: take the base from
 `/proc/<pid>/maps` (the mapping of victory.exe at file offset 0), RVA = ip −
