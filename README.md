@@ -1,47 +1,106 @@
-# VIctory on an RX 7900 XTX
+# VIctory-8050S
 
-A fork of [VIctory](https://github.com/Marvisak/VIctory), a compatibility layer
-that runs an Xbox Series title natively on Windows from files the user supplies.
-
-## The goal
-
-**A stable 30 fps or more without ray tracing, then as high a frame rate and as
-low frame times as the PC allows**, on an AMD RX 7900 XTX first and on PCs with
-32 GB (later 16 GB) of RAM.
-
-The way there is **porting, not emulating**: patching the title's renderer so it
-behaves the way a PC renderer does, rather than having the layer watch and copy
-the console's shared memory every frame. Shaders are translated ahead of time
-into a versioned store that is kept between builds. Ray tracing stays optional
-and off by default. The picture comes after the frame rate: texture pop-in and
-lighting that is too bright or too dark when walking indoors are next in line.
+A fork of [VIctory](https://github.com/Marvisak/VIctory) (by way of
+Belobug/VIctory-Belobug-AMD), a compatibility layer that runs an Xbox Series
+title from files the user supplies, **made for one machine: a Framework
+Desktop with the Ryzen AI Max 385 and its Radeon 8050S, on Linux through
+GE-Proton.**
 
 **This repository contains no game files, code or assets.** You need your own
 copy of the game. It is not affiliated with or endorsed by the game's developer
 or publisher.
 
-## VIctory-8050S: Linux, Proton and the Radeon 8050S
+## The idea
 
-This fork targets one machine: a Framework Desktop with the Ryzen AI Max 385
-(Radeon 8050S, unified memory), on Linux through GE-Proton, run with
-victory-sandbox (`victory-sandbox build`, `run`). It runs
-the Series S profile unless told (`--console series-x`).
+The console has one memory that CPU and GPU share. Upstream VIctory runs on
+PCs with a graphics card of their own, so it keeps copies of the title's
+memory on the card, watches every page the title writes and copies changes
+over, both ways, every frame. **The 8050S has unified memory too**: the card
+can read and write the title's own bytes where the title has them, and every
+copy, compare and write watch for that memory is work that need not exist.
 
-What is different here, and why:
+So this fork:
+
+1. makes the card use the title's memory in place on Linux (which, under
+   Wine, first needed the host import of that memory to work at all),
+2. fixes what Wine and Proton make slow for this title, in Wine itself where
+   that is where the cost is,
+3. measures every step on this machine and keeps what helps
+   (`linux/bench-scene.sh`, the debug panel),
+4. then turns to the picture: textures, lighting, ray tracing.
+
+It runs the Series S profile unless told (`--console series-x`): its memory
+and its speed are closer to this machine's.
+
+## Setup
+
+1. GE-Proton 11-14 and victory-sandbox (builds VIctory
+   for Windows on Linux and runs it in an offline bubblewrap sandbox).
+2. The patched wineserver (see below), built into a copy of GE-Proton; your
+   GE-Proton stays as it is:
+
+       linux/wine/build-wineserver.sh
+       victory-sandbox setup --repo <this checkout> --proton ~/.local/share/Steam/compatibilitytools.d/GE-Proton11-14-x86_64-victory
+
+3. `victory-sandbox build` (it also builds and installs the userptr shim) and
+   `victory-sandbox run`. For the debug panel and scripted runs, build with
+   `--build-args "-p victory --features diagnostics"`.
+4. Once per build of the translator: warm the pipelines, so the first minutes
+   do not compile them (`victory.exe warm` in the sandbox, after one run with
+   `VICTORY_PIPELINE_BOOK=1` to record them; about 9 minutes for 83,000).
+
+## Where it stands on the 8050S (2026-11-27)
+
+Framework Desktop, Ryzen AI Max 385, Radeon 8050S, 32 GB (512 MB set aside
+for the GPU), Arch Linux, kernel 7.3, Mesa 26.3 (RADV), GE-Proton 11-14.
+The intro's 3D scene, reached unattended by `linux/bench-scene.sh`, Series S
+profile, ray tracing off; median of the frame lines with 100 draws a frame or
+more (several runs each: the scene streams, runs differ):
+
+| Step | Median ms a frame | |
+|---|---|---|
+| Upstream switches, debug logging | about 1,100 | 0.3-1 fps; the card busy about 7% of the time |
+| Renderer patches 1, 2, 5, 6, 7 on (needs the userptr shim) | 943 | |
+| + one mapping thread, texture refreshes that do not wait for remaps | 289-435 | this fork's defaults under Wine |
+| + **patched wineserver** | **94-103** | about 10 fps |
+
+Where a frame goes now (debug panel, frame lines): the title's own threads
+and our submitting thread take turns; the card is busy about 20% of a frame.
+
+What was found on the way, measured:
+
+- **Wine's view list.** The title shows its page pool through ~63,000 views
+  of 64 KiB and maps some 2,000 pages a second. wineserver keeps a process's
+  views in a list and walked it on every map and unmap: one map cost 25 us
+  with 1,000 views, 210 us with 65,536 (`xmem` test `view_scaling`), 2.3 ms in
+  the running title, and wineserver used 92% of a core while the title's
+  threads waited for it. With the views indexed by address: 8.4 us at 65,536.
+- **The host import of title memory.** libdrm asks the kernel for
+  anonymous-only userptrs; every section under Wine is a shared file mapping,
+  so RADV refused it and vkd3d-proton, silently, gave the card memory of its
+  own. Renderer patch 1 read zeros there. The shim drops that flag; the probe
+  (`VICTORY_INPLACE_PROBE=1`) then finds the page pool readable and writable
+  in place.
+- **Mapping by copying is no way out**: 96% of the pages the title maps are
+  shown at another address already, so copies would part.
+- **In place for everything** (`VICTORY_PORT_ALL=1` with `VICTORY_INPLACE=2`)
+  puts 1.3 GB in place, but the latter needs `VICTORY_LATE_WAIT=0`, and every
+  submission then waits for the card: worse for now (539 ms median, before
+  the wineserver patch).
+
+## What this fork adds
 
 | Piece | What it does |
 |---|---|
-| `linux/userptr-shim` | Preloaded into the game by victory-sandbox. libdrm asks the kernel for anonymous-only host imports, so RADV could not import Wine's sections (shared file mappings) and vkd3d-proton fell back, silently, to memory of its own. With the shim the title's page pool can be read and written by the card in place (`VICTORY_INPLACE_PROBE=1` checks it). `VICTORY_USERPTR_SHIM=0` leaves it out. |
-| `linux/wine` | wineserver keeps a process's memory views in a list and walks it on every map and unmap; the title keeps ~63,000 views of its page pool, so a map cost 0.2-2.3 ms and wineserver ran at 92% of a core. The patch indexes the views by address; `build-wineserver.sh` builds GE-Proton's own server with it into a copy of that GE-Proton. |
-| `linux/bench-scene.sh` | Runs the intro's 3D scene unattended (diagnostics build: Enter pressed by `VICTORY_KEYS`) and summarises the frame lines; extra switches from the environment. |
-| Debug panel | `VICTORY_PANEL=1` (or F3): the HUD has Linux rows: the card idle because the title had not submitted (`TITLE`) or because we worked (`OURS`), copying back; preparing's copies, texture refreshes and their waits for remaps; the title's page maps and unmaps a second and ms each; write-watch ms, guard faults, pipeline waits a frame; MB in place, Wine, and whether the shim is loaded. Rows turn orange where a frame is lost. |
+| `linux/wine` | The wineserver patch (views indexed by address) and `build-wineserver.sh`, which builds GE-Proton's own server with it (GE's exact Wine tree and patches, so the server protocol matches) into a copy of that GE-Proton. |
+| `linux/userptr-shim` | Preloaded into the game by victory-sandbox: drops `AMDGPU_GEM_USERPTR_ANONONLY` from RADV's host imports, so Wine's sections can be the card's memory. `VICTORY_USERPTR_SHIM=0` leaves it out. |
+| Linux defaults | Under Wine, switches you did not set: renderer patches 1, 2, 5, 6, 7, `VICTORY_MAP_THREADS=1`, `VICTORY_TEXTURE_NO_WAIT=1` (the last two only matter without the patched server). `VICTORY_LINUX_DEFAULTS=0`: as upstream. |
+| Debug panel | `VICTORY_PANEL=1` (or F3): FPS, frame graph, GPU, VRAM, CPU, RAM, and Linux rows: the card idle because the title had not submitted (`TITLE`) or because we worked (`OURS`), copying back; preparing's copies, texture refreshes and their waits for remaps; the title's page maps and unmaps a second and ms each; write-watch ms, guard faults, pipeline waits a frame; MB in place, Wine, and whether the shim is loaded. Rows turn orange where a frame is lost. |
+| `linux/bench-scene.sh` | The intro's 3D scene unattended (diagnostics build: Enter pressed by `VICTORY_KEYS`), summarised; extra switches from the environment. |
+| `VICTORY_PORT_ALL=1` | Renderer patch 1 for any stretch of the page pool, not only the 32-bit heap (off). |
 
-On this machine, all five renderer patches below matter more than on Windows
-(port 1 needs the shim under Wine). `VICTORY_MAP_THREADS=1` and
-`VICTORY_TEXTURE_NO_WAIT=1` halve the median frame while the view list is
-unpatched.
+## Upstream: where it stood on Windows (2026-11-26)
 
-## Where it stands (2026-11-26)
 
 Tested on one machine only: Windows 11, Intel i9-12900K, 64 GB RAM, Radeon
 RX 7900 XTX, ray tracing off.
@@ -60,7 +119,7 @@ It started at 280 ms a frame in the same scenes three days earlier. What sets
 the frame now is the one thread that submits the title's work to the card
 (about 40 ms); the card itself needs about 36 ms and now waits about 7 ms a frame with nothing queued.
 
-### Renderer patches (off by default while they are tested)
+### Renderer patches (off by default upstream; on here under Wine)
 
 | Switch | What it does |
 |---|---|
