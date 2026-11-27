@@ -40,8 +40,6 @@ use std::ffi::c_void;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use windows::Win32::Foundation::HANDLE;
-use windows::Win32::Graphics::Direct3D::Fxc::D3DCompile;
-use windows::Win32::Graphics::Direct3D::ID3DBlob;
 use windows::Win32::Graphics::Direct3D12::*;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
 use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
@@ -760,24 +758,28 @@ impl Rig {
     /// `gpu`, the sum of the buffer's first two words in its third.
     fn shade(&mut self, gpu: u64) -> windows::core::Result<()> {
         const SOURCE: &str = "#define RS \"UAV(u0)\"\nRWByteAddressBuffer b : register(u0);\n[RootSignature(RS)]\n[numthreads(1, 1, 1)]\nvoid main() { b.Store(8, b.Load(0) + b.Load(4)); }\n";
-        let mut code: Option<ID3DBlob> = None;
-        // The root signature is made here (`crate::rootsig`): under Wine the
-        // compiler embeds none, and taking it from the blob failed there, so
-        // the probe said shaders cannot write in place when they can.
-        let root = crate::rootsig::make(&self.device, &[crate::rootsig::Param::Uav(0)], "in place probe")?;
-        // SAFETY: the source and names live through the call; then the
-        // blob's own bytes.
-        let (root, pso): (ID3D12RootSignature, ID3D12PipelineState) = unsafe {
-            D3DCompile(SOURCE.as_ptr().cast(), SOURCE.len(), s!("inplace"), None, None, s!("main"), s!("cs_5_1"), 0, 0, &mut code, None)?;
-            let code = code.ok_or_else(windows::core::Error::empty)?;
-            let bytes = std::slice::from_raw_parts(code.GetBufferPointer().cast::<u8>(), code.GetBufferSize());
-            let pso = self.device.CreateComputePipelineState(&D3D12_COMPUTE_PIPELINE_STATE_DESC {
-                pRootSignature: std::mem::transmute_copy(&root),
-                CS: D3D12_SHADER_BYTECODE { pShaderBytecode: bytes.as_ptr().cast(), BytecodeLength: bytes.len() },
-                ..Default::default()
-            })?;
-            (root, pso)
+        // Each step names itself when it fails: the verdict line keeps only
+        // the error, and under Wine more than one step has failed here.
+        let step = |what: &'static str| {
+            move |e: windows::core::Error| {
+                tracing::info!(step = what, error = %e, "in place probe: the shader write failed");
+                e
+            }
         };
+        // The root signature is made here (`crate::rootsig`): under Wine the
+        // compiler embeds none, and taking it from the blob failed there.
+        let root = crate::rootsig::make(&self.device, &[crate::rootsig::Param::Uav(0)], "in place probe")
+            .map_err(step("root signature"))?;
+        let code = crate::host::compile(SOURCE, s!("main"), s!("cs_5_1")).map_err(step("compile"))?;
+        // SAFETY: plain creation; the code lives through the call.
+        let pso: ID3D12PipelineState = unsafe {
+            self.device.CreateComputePipelineState(&D3D12_COMPUTE_PIPELINE_STATE_DESC {
+                pRootSignature: std::mem::transmute_copy(&root),
+                CS: D3D12_SHADER_BYTECODE { pShaderBytecode: code.as_ptr().cast(), BytecodeLength: code.len() },
+                ..Default::default()
+            })
+        }
+        .map_err(step("pipeline"))?;
         // SAFETY: an open list of ours; the view names a live buffer.
         self.run(|list| unsafe {
             list.SetComputeRootSignature(&root);
@@ -785,6 +787,7 @@ impl Rig {
             list.SetComputeRootUnorderedAccessView(0, gpu);
             list.Dispatch(1, 1, 1);
         })
+        .map_err(step("run"))
     }
 
     /// Milliseconds the card takes to copy `bytes` of `from` into its own
