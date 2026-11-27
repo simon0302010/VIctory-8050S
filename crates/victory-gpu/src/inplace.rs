@@ -127,11 +127,78 @@ pub(crate) fn place_part(device: &ID3D12Device, start: u64, len: u64) -> Result<
     if !private_whole(at as usize, bytes as usize) {
         return Err(None);
     }
+    if grouped()
+        && let Some(placed) = place_grouped(device, start, at, bytes)
+    {
+        return Ok(placed);
+    }
     let heap = open(device, From::Part(at as usize, bytes as usize)).map_err(Some)?;
     let buffer = place(device, &heap, 0, bytes).map_err(Some)?;
     // SAFETY: a live buffer.
     let gpu = unsafe { buffer.GetGPUVirtualAddress() } + (start - at);
     Ok(Placed { buffer, heap, gpu, bias: start - at })
+}
+
+/// `VICTORY_INPLACE_GROUP=1`: in-place buffers share heaps (off: a heap
+/// each). Every heap opened on title memory is a kernel userptr object; with
+/// one per buffer (3,669 of them, 128 KB on average, in the intro's scene)
+/// the card ran 98-100% of a 255-271 ms frame against ~20% of a ~100 ms one
+/// with copies. Shared heaps did not help (341-396 ms, the card still ~95%
+/// busy), so the count is not it; the suspect is the upkeep of those pages
+/// (under Wine a write-watch reset is an mprotect, which invalidates the
+/// card's import and waits for the card). A heap is opened once over the
+/// committed private run around a buffer, cut to the [`CHUNK`] it lies in.
+fn grouped() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("VICTORY_INPLACE_GROUP").is_ok_and(|v| v.trim() == "1"))
+}
+
+/// The most a shared heap covers, and the grid it is cut on.
+const CHUNK: u64 = 64 << 20;
+
+/// Shared heaps: the title memory they cover and the heap.
+struct Chunk {
+    start: u64,
+    end: u64,
+    heap: ID3D12Heap,
+}
+
+// SAFETY: D3D12 heaps are free-threaded.
+unsafe impl Send for Chunk {}
+
+static CHUNKS: std::sync::Mutex<Vec<Chunk>> = std::sync::Mutex::new(Vec::new());
+
+/// [`place_part`] in a shared heap; `None`: a heap of its own instead.
+fn place_grouped(device: &ID3D12Device, start: u64, at: u64, bytes: u64) -> Option<Placed> {
+    let end = at + bytes;
+    let mut chunks = CHUNKS.lock().unwrap_or_else(|e| e.into_inner());
+    let i = match chunks.iter().position(|c| c.start <= at && end <= c.end) {
+        Some(i) => i,
+        None => {
+            // The committed private run around `at`, cut to its chunk.
+            // SAFETY: plain data filled in by the query.
+            let mut info: mem::MEMORY_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
+            // SAFETY: a valid out pointer of the right size.
+            if unsafe { mem::VirtualQuery(at as *const c_void, &mut info, size_of_val(&info)) } == 0 {
+                return None;
+            }
+            let (run_start, run_end) = (info.BaseAddress as u64, info.BaseAddress as u64 + info.RegionSize as u64);
+            let grid = at & !(CHUNK - 1);
+            let lo = run_start.max(grid).next_multiple_of(K64 as u64);
+            let hi = run_end.min(grid + CHUNK) & !(K64 as u64 - 1);
+            if lo > at || end > hi || !private_whole(lo as usize, (hi - lo) as usize) {
+                return None;
+            }
+            let heap = open(device, From::Part(lo as usize, (hi - lo) as usize)).ok()?;
+            chunks.push(Chunk { start: lo, end: hi, heap });
+            chunks.len() - 1
+        }
+    };
+    let chunk = &chunks[i];
+    let buffer = place(device, &chunk.heap, at - chunk.start, bytes).ok()?;
+    // SAFETY: a live buffer.
+    let gpu = unsafe { buffer.GetGPUVirtualAddress() } + (start - at);
+    Some(Placed { buffer, heap: chunk.heap.clone(), gpu, bias: start - at })
 }
 
 /// Title memory `[start, start + len)` in place, for a window outside
@@ -195,6 +262,12 @@ pub(crate) fn gone(window: bool, bytes: u64) {
 pub fn title_memory_freeing(at: usize, len: usize) {
     // Renderer port 1's regions there: no longer what the title shows.
     crate::port::forget(at, len);
+    // Shared heaps there are not given out again (buffers placed in them
+    // keep theirs until let go).
+    if grouped() {
+        let (at, end) = (at as u64, (at + len) as u64);
+        CHUNKS.lock().unwrap_or_else(|e| e.into_inner()).retain(|c| c.end <= at || c.start >= end);
+    }
     if STATS[0].load(Ordering::Relaxed) + STATS[2].load(Ordering::Relaxed) == 0 {
         return;
     }
