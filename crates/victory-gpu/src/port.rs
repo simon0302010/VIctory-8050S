@@ -107,10 +107,21 @@ pub(crate) fn region_bytes() -> u64 {
     STATS[1].load(Ordering::Relaxed)
 }
 
+/// `VICTORY_PORT_ALL=1` (with port 1 on): any title memory that is one
+/// stretch of a section is ported, not only the 32-bit graphics heap. Under
+/// Wine this needs the userptr shim (`crate::wine`): without it the host
+/// import of a section fails and vkd3d-proton gives memory of its own.
+/// The title's GPU-written buffers above 4 GiB were copied, compared and
+/// written back every frame (3.3 GB compared a frame in the intro's scene).
+pub(crate) fn all() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("VICTORY_PORT_ALL").is_ok_and(|v| v.trim() == "1"))
+}
+
 /// Whether `[at, at + len)` may be ported: in the title's 32-bit graphics
-/// memory.
+/// memory, or anywhere with [`all`].
 pub(crate) fn wanted(at: u64, len: u64) -> bool {
-    on() && at.checked_add(len).is_some_and(|end| end <= LOW && len > 0)
+    on() && len > 0 && at.checked_add(len).is_some_and(|end| end <= LOW || all())
 }
 
 /// Title memory `[start, start + len)` in place, if [`wanted`] and the
