@@ -975,16 +975,43 @@ pub(crate) fn pages_written(pages: &[usize], offset: usize, len: usize) {
 /// milliseconds.
 static MAPPING: [std::sync::atomic::AtomicU64; 15] = [const { std::sync::atomic::AtomicU64::new(0) }; 15];
 
+/// For the streaming log: pages mapped by the title's calls, and of them
+/// those that another address showed already when mapped (aliases).
+/// Whether the page pool can do without views of sections depends on how
+/// often the title shows one page in two places.
+static ALIASING: [std::sync::atomic::AtomicU64; 2] = [const { std::sync::atomic::AtomicU64::new(0) }; 2];
+
+/// Notes that `[base, base + len)` shows `slice`, counting aliases
+/// ([`ALIASING`]) while the streaming log is on.
+fn note_shown(base: usize, len: usize, slice: &Slice) {
+    let mut shown = shown_mut();
+    shown.note(base, len, slice);
+    if !super::dstorage::stream_log::on() || len / PAGE > SHORT {
+        return;
+    }
+    let mut aliased = 0;
+    for k in 0..len / PAGE {
+        let page = Slice { section: slice.section.clone(), index: slice.index + k };
+        if shown.at(&page).len() > 1 {
+            aliased += 1;
+        }
+    }
+    ALIASING[0].fetch_add((len / PAGE) as u64, Ordering::Relaxed);
+    ALIASING[1].fetch_add(aliased, Ordering::Relaxed);
+}
+
 pub(crate) fn map_costs() -> Option<String> {
     let n: [u64; 15] = std::array::from_fn(|i| MAPPING[i].swap(0, Ordering::Relaxed));
     let time = |i: usize| matches!(i, 2 | 3 | 4 | 6 | 8 | 10 | 12 | 14);
     (n[0] + n[5] > 0).then(|| {
-        let all: Vec<String> = n
+        let mut all: Vec<String> = n
             .iter()
             .enumerate()
             .map(|(i, &n)| if time(i) { n / 1_000_000 } else { n })
             .map(|n| n.to_string())
             .collect();
+        // Then pages mapped and of them aliases.
+        all.extend(ALIASING.iter().map(|a| a.swap(0, Ordering::Relaxed).to_string()));
         all.join("\t")
     })
 }
@@ -1573,7 +1600,7 @@ fn change(physical: &mut Physical, mut ops: Vec<Op>) -> bool {
         match op.slice {
             Some(slice) if done => {
                 // As in `map`.
-                shown_mut().note(op.at, PAGE, &slice);
+                note_shown(op.at, PAGE, &slice);
                 victory_gpu::title_memory_remapped(op.at, PAGE);
                 victory_gpu::title_memory_view(op.at, PAGE, slice.section.handle as usize, (slice.index * PAGE) as u64);
                 physical.views.insert(op.at, (PAGE, slice));
@@ -1717,7 +1744,7 @@ fn map(physical: &mut Physical, base: usize, len: usize, slice: Slice) -> bool {
     // Noted before the GPU side is told: bytes DirectStorage put in earlier,
     // without notice at these addresses ([`pages_written`]), are there by
     // the time the copies of them go.
-    shown_mut().note(base, len, &slice);
+    note_shown(base, len, &slice);
     // New contents, read-write: the GPU side's copies no longer guard it.
     victory_gpu::title_memory_remapped(base, len);
     // What the range shows now, for the GPU side's in-place census.
@@ -2542,6 +2569,67 @@ mod tests {
             );
         }
         assert_eq!(XMemFreePhysicalPages(1024, pages.as_ptr()), 1);
+    }
+
+    /// What one 64 KiB view costs to map and unmap as the views already
+    /// there grow, with the host's calls alone (no runtime of ours): the
+    /// title keeps some 63,000 views of its page pool, and under Wine each
+    /// map took ~2.3 ms in the running title.
+    /// `cargo test --release -p victory-hle --lib view_scaling -- --ignored --nocapture`
+    #[test]
+    #[ignore = "a benchmark"]
+    fn view_scaling() {
+        use std::time::Instant;
+        const VIEWS: usize = 65_536;
+        let size = VIEWS * PAGE;
+        // SAFETY (the whole test): the section, placeholder and views made here.
+        unsafe {
+            let process = GetCurrentProcess();
+            let section = CreateFileMappingW(
+                INVALID_HANDLE_VALUE,
+                std::ptr::null(),
+                PAGE_READWRITE | if on_wine() { SEC_COMMIT } else { SEC_RESERVE },
+                (size as u64 >> 32) as u32,
+                size as u32,
+                std::ptr::null(),
+            );
+            assert!(!section.is_null());
+            let base = VirtualAlloc2(process, std::ptr::null(), size, MEM_RESERVE | MEM_RESERVE_PLACEHOLDER, PAGE_NOACCESS, std::ptr::null_mut(), 0) as usize;
+            assert_ne!(base, 0);
+            let mut views = Vec::with_capacity(VIEWS);
+            let (mut mark, mut started) = (1024, Instant::now());
+            println!("wine {}", on_wine());
+            for i in 0..VIEWS {
+                let at = base + i * PAGE;
+                if i + 1 < VIEWS {
+                    assert_ne!(VirtualFree(at as *mut c_void, PAGE, MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER), 0);
+                }
+                // Every other page of the section, as scattered pages are.
+                let page = (i * 2) % VIEWS;
+                let view = MapViewOfFile3(section, process, at as *const c_void, (page * PAGE) as u64, PAGE, MEM_REPLACE_PLACEHOLDER, PAGE_READWRITE, std::ptr::null_mut(), 0);
+                assert!(!view.Value.is_null(), "view {i}");
+                views.push(view);
+                if i + 1 == mark {
+                    println!("views {mark:>6}: {:.1} us a map over the last {}", started.elapsed().as_secs_f64() * 1e6 / (mark / 2).max(1) as f64, (mark / 2).max(1));
+                    mark *= 2;
+                    started = Instant::now();
+                }
+            }
+            // Unmap and map again one page at the end, with all of them there.
+            let started = Instant::now();
+            for view in views.iter().rev().take(1000) {
+                assert_ne!(UnmapViewOfFile2(process, *view, MEM_PRESERVE_PLACEHOLDER), 0);
+                let again = MapViewOfFile3(section, process, view.Value, 0, PAGE, MEM_REPLACE_PLACEHOLDER, PAGE_READWRITE, std::ptr::null_mut(), 0);
+                assert!(!again.Value.is_null());
+            }
+            println!("with {VIEWS} views: {:.1} us an unmap and map", started.elapsed().as_secs_f64() * 1e6 / 1000.0);
+            let started = Instant::now();
+            for view in views {
+                UnmapViewOfFile2(process, view, 0);
+            }
+            println!("unmapping them all: {:.1} us each", started.elapsed().as_secs_f64() * 1e6 / VIEWS as f64);
+            CloseHandle(section);
+        }
     }
 
     /// `n` pages of one new allocation.
