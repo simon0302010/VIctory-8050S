@@ -3517,7 +3517,7 @@ fn staged(sampler: bool, which: u32) -> Option<D3D12_CPU_DESCRIPTOR_HANDLE> {
             }
         }
     }
-    thread_local! {
+    crate::fast_local! {
         static PLACE: Place = {
             let mut places = PLACES.lock().unwrap_or_else(|e| e.into_inner());
             Place(places.0.pop().or_else(|| {
@@ -6130,7 +6130,7 @@ impl ListViews {
     }
 }
 
-thread_local! {
+crate::fast_local! {
     static LIST_VIEWS: std::cell::RefCell<Option<ListViews>> = const { std::cell::RefCell::new(None) };
 }
 

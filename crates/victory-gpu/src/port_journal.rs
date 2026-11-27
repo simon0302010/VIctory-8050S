@@ -52,7 +52,7 @@ pub(crate) fn round_after(asked: u64, done: u64) -> (u64, bool) {
     if asked >= done + 2 { (asked, false) } else { (asked + 1, true) }
 }
 
-thread_local! {
+crate::fast_local! {
     /// On the lane: the round of the heaps' records the submission being
     /// prepared needs (0: none known, a round is asked for as before).
     static MARK: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };

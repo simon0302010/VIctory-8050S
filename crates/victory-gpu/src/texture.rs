@@ -654,7 +654,7 @@ pub(crate) fn upload(list: &HostList, resource: This, _texture: &ID3D12Resource)
     upload_from(list, resource, 0);
 }
 
-thread_local! {
+crate::fast_local! {
     /// The thread records uploads for a draw that bakes from them.
     pub(crate) static BAKING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// The thread records the upload of a texture picked by index, of which

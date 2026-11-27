@@ -15,6 +15,8 @@
 //! share, [`console`] which console model the title sees. Planned:
 //! `present` (swap chain).
 
+#[macro_use]
+pub(crate) mod fast_local;
 #[cfg(windows)]
 mod ambient;
 #[cfg(windows)]

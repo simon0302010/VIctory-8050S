@@ -148,15 +148,31 @@ static COUNT: [Bank<COUNTERS>; BANKS] = [const { Bank([const { AtomicU64::new(0)
 #[inline]
 fn bank() -> usize {
     static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    thread_local!(static MINE: std::cell::Cell<usize> = const { std::cell::Cell::new(usize::MAX) });
-    // (Asked by the allocator too: nothing here allocates.)
-    MINE.try_with(|mine| {
-        if mine.get() == usize::MAX {
-            mine.set(NEXT.fetch_add(1, Relaxed) % BANKS);
+    // (Asked by the allocator too: nothing here allocates. The set's number
+    // plus one, in the thread's TLS slot: `crate::fast_local`.)
+    #[cfg(windows)]
+    {
+        static MINE: crate::fast_local::FastWord = crate::fast_local::FastWord::new();
+        match MINE.get() {
+            0 => {
+                let mine = NEXT.fetch_add(1, Relaxed) % BANKS;
+                MINE.set(mine + 1);
+                mine
+            }
+            mine => mine - 1,
         }
-        mine.get()
-    })
-    .unwrap_or(0)
+    }
+    #[cfg(not(windows))]
+    {
+        thread_local!(static MINE: std::cell::Cell<usize> = const { std::cell::Cell::new(usize::MAX) });
+        MINE.try_with(|mine| {
+            if mine.get() == usize::MAX {
+                mine.set(NEXT.fetch_add(1, Relaxed) % BANKS);
+            }
+            mine.get()
+        })
+        .unwrap_or(0)
+    }
 }
 
 pub(crate) fn add(c: C, n: u64) {
@@ -1097,7 +1113,7 @@ struct Submitter {
 static SUBMITTERS: Mutex<Vec<(u32, Submitter)>> = Mutex::new(Vec::new());
 static RECORDERS: Mutex<Vec<(u32, u64, u64)>> = Mutex::new(Vec::new());
 
-thread_local! {
+crate::fast_local! {
     /// This thread's last submission: when it returned ([`now_us`]) and the
     /// thread's processor time then (user, kernel).
     static LEFT: std::cell::Cell<Option<(u64, u64, u64)>> = const { std::cell::Cell::new(None) };
@@ -1158,16 +1174,25 @@ fn submitter(all: &mut Vec<(u32, Submitter)>, id: u32) -> &mut Submitter {
 type Sites = HashMap<(&'static str, u32, &'static str), (u64, u64)>;
 static SITES: Mutex<Option<Sites>> = Mutex::new(None);
 
-thread_local! {
+crate::fast_local! {
     static SITES_HERE: std::cell::RefCell<(Sites, u64)> = std::cell::RefCell::new((HashMap::new(), 0));
     /// The list call under way on this thread: its place, and the last mark.
     static CALL: std::cell::Cell<Option<(&'static std::panic::Location<'static>, std::time::Instant)>> =
         const { std::cell::Cell::new(None) };
 }
 
+/// Whether list calls are timed by part (`VICTORY_MARKS=1`; each mark costs
+/// some 0.3 us, which the parts then include).
+fn marks_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_MARKS").is_some_and(|v| v == "1"))
+}
+
 /// A list call begins at `started`, called from `at` ([`recorded_at`] ends it).
 pub(crate) fn call_begins(started: std::time::Instant, at: &'static std::panic::Location<'static>) {
-    CALL.set(Some((at, started)));
+    if marks_on() {
+        CALL.set(Some((at, started)));
+    }
 }
 
 /// The part of the list call under way since its last mark (or its start)
@@ -1189,8 +1214,10 @@ pub(crate) fn mark(label: &'static str) {
 
 /// As [`recorded`], and the time summed by the call's place `at`.
 pub(crate) fn recorded_at(started: std::time::Instant, at: &'static std::panic::Location<'static>) {
-    mark("(after the last mark)");
-    CALL.set(None);
+    if marks_on() {
+        mark("(after the last mark)");
+        CALL.set(None);
+    }
     let ns = started.elapsed().as_nanos() as u64;
     recorded(started);
     SITES_HERE.with(|h| {

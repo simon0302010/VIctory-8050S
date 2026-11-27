@@ -100,7 +100,7 @@ pub(crate) fn on() -> bool {
 }
 
 pub(super) fn thread() -> u32 {
-    thread_local!(static ID: Cell<u32> = const { Cell::new(0) });
+    crate::fast_local!(static ID: Cell<u32> = const { Cell::new(0) });
     ID.with(|id| {
         if id.get() == 0 {
             // SAFETY: a plain query.
@@ -225,7 +225,7 @@ pub(crate) fn called(took: std::time::Duration) {
     let inside = (took.as_nanos() as u64).saturating_mul(frequency()) / 1_000_000_000;
     let t1 = ticks();
     let t0 = t1 - inside;
-    thread_local! {
+    crate::fast_local! {
         /// The run under way: from, to, calls, ticks inside them.
         static RUN: Cell<(u64, u64, u64, u64)> = const { Cell::new((0, 0, 0, 0)) };
     }
@@ -245,7 +245,7 @@ pub(crate) fn called(took: std::time::Duration) {
     }
 }
 
-thread_local! {
+crate::fast_local! {
     /// What the wait this thread makes now stands for ([`card_wait`]).
     static CARD: Cell<u64> = const { Cell::new(0) };
 }
@@ -313,7 +313,7 @@ pub(crate) fn polled(at: usize, value: u64) {
     if !on() {
         return;
     }
-    thread_local! {
+    crate::fast_local! {
         /// The same answer, again and again: fence, value, from, to.
         static SAME: Cell<(usize, u64, u64, u64)> = const { Cell::new((0, 0, 0, 0)) };
     }

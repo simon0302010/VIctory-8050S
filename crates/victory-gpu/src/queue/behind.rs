@@ -726,7 +726,7 @@ fn number(name: &str) -> Option<usize> {
     std::env::var(name).ok()?.trim().parse().ok()
 }
 
-thread_local! {
+crate::fast_local! {
     /// This is the thread that does what is in the line.
     static OURS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
@@ -1045,7 +1045,7 @@ mod tests {
         }
     }
 
-    thread_local! {
+    crate::fast_local! {
         static FORCED_HERE: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
         /// What [`Work::mark_now`] and [`Work::mark_later`] give in a test.
         static NOW: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };

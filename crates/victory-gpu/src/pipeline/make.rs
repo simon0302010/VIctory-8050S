@@ -152,7 +152,7 @@ static CRASH_EVENT: AtomicUsize = AtomicUsize::new(0);
 /// screen alone. Never locked by the handler.
 static ACTIVE_JOBS: Mutex<Vec<Option<(Arc<Pending>, bool)>>> = Mutex::new(Vec::new());
 
-thread_local! {
+crate::fast_local! {
     /// This worker's slot (`usize::MAX`: none).
     static WORKER_SLOT: std::cell::Cell<usize> = const { std::cell::Cell::new(usize::MAX) };
     /// Whether this thread is inside the compile of a pipeline.

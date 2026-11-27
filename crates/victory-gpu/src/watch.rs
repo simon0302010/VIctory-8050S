@@ -480,7 +480,7 @@ thread_local! {
     pub(crate) static PORT_JOURNAL_IN_TEST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-thread_local! {
+crate::fast_local! {
     /// Whether this thread is the submitting lane ("victory-submit").
     static ON_LANE: bool = std::thread::current().name() == Some("victory-submit");
 }
@@ -3442,7 +3442,7 @@ impl Drop for Remapping {
 /// shows: odd while one is under way.
 static CHANGES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-thread_local! {
+crate::fast_local! {
     /// This thread holds [`Remapping`]; and put blocks in
     /// [`Guards::changing`].
     static CHANGING: std::cell::Cell<(bool, bool)> = const { std::cell::Cell::new((false, false)) };

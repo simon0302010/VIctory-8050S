@@ -373,7 +373,7 @@ pub fn on() -> bool {
     RECORDER.get().is_some()
 }
 
-thread_local! {
+crate::fast_local! {
     static OURS: Cell<u32> = const { Cell::new(0) };
 }
 
