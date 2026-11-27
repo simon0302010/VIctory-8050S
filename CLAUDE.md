@@ -314,7 +314,11 @@ u5 stepping by 242 per dispatch — not a heap index, the ops file's
 on a ~800 KB R16G16B16A16_UINT UAV. Likely the face network / head morphs
 whose output the head's mesh shader adds; their output on our stack is
 garbage (NaN or huge offsets → head invisible). The skip is a workaround:
-faces likely lose expressions. Next: find what is wrong in these programs'
+faces likely lose expressions. **The user is NOT happy with this workaround
+(2026-11-28): it is a stopgap, not a solution. Top priority next session: find
+and fix what these programs compute wrong, then remove the skip from the Linux
+defaults.** The picture overall is also not acceptable yet (lighting, noise,
+black geometry, artifacts). Next: find what is wrong in these programs'
 translation or inputs — e.g. dump their UAV after a frame (compare with
 what upstream's 4243a96a describes), check their d16/typed accesses and
 wave ops (wave.rs mentions `CS_TransposeVecMatMulAlignedOperation`'s
@@ -327,7 +331,7 @@ black triangles/planes blinking, checkerboard/comb artifacts.
 
 ## 8. Plan (agreed direction: playable 30 fps first, then picture)
 
-Next steps in order; the user asked to start with step 1 when resuming.
+Next steps in order. **When resuming (2026-11-28 onward): first the real fix for the missing heads (section 7c), then the other picture bugs; frame rate after.**
 
 1. ~~**Measure the GPU's ~35 ms.**~~ Done, see the step 1 result in section 6: 25-33 ms, title 21-29. Use the GPU timing mode (`VICTORY_GPU_TIMING`; note it forces late wait off, see `late_stage`) or a capture to split title rendering vs our own passes (uploads of card copies ~45 MB/frame, compare passes, texture uploads, ambient/compose). The 8050S has ~2.5× the Series S's compute at similar bandwidth, so the title's own rendering should fit well under 33 ms; if not, look at translated shader cost. This decides whether resolution scale / FSR is worth anything.
 2. ~~**Overlap CPU and GPU.**~~ Measured, see step 2 result: the waits are removable but the CPU is saturated; recording is the critical path. Today preparing (~16 ms idle card), submitting and waiting (~17 ms) are serialized. Goal: frame ≈ max(GPU, CPU) ≈ 35-40 ms. Look at the late-wait/relay machinery (`host.rs` `late_stage`, flights, settles, "waits for every earlier shader write", "submissions sent ahead") for what forces the 17 ms of waits.
