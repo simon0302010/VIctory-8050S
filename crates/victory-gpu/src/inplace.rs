@@ -1004,8 +1004,21 @@ unsafe fn section(p: &mut Probe, rig: &mut Rig) {
         // Pages 4..12 of the section at the placeholder's start.
         mem::VirtualFree(hole.cast(), 8 * K64, mem::MEM_RELEASE | mem::MEM_PRESERVE_PLACEHOLDER);
         let view = mem::MapViewOfFile3(handle, process, hole.cast(), (4 * K64) as u64, 8 * K64, mem::MEM_REPLACE_PLACEHOLDER, mem::PAGE_READWRITE, std::ptr::null_mut(), 0);
-        let opened = open(&rig.device, From::Section(handle as usize));
-        p.lines.push(format!("a section made committed (OpenExistingHeapFromFileMapping): {}", hr(&opened)));
+        // Under Wine, vkd3d-proton's `OpenExistingHeapFromFileMapping` maps
+        // a view, imports it and unmaps it at once: with the userptr shim
+        // the import follows the view, which is then gone. The heap is
+        // opened instead on a whole view of ours that stays, as the page
+        // pool is opened there (`crate::wine`).
+        let window = if crate::wine::on() { mem::MapViewOfFile(handle, mem::FILE_MAP_ALL_ACCESS, 0, 0, SIZE) } else { mem::MEMORY_MAPPED_VIEW_ADDRESS { Value: std::ptr::null_mut() } };
+        let opened = if window.Value.is_null() {
+            let opened = open(&rig.device, From::Section(handle as usize));
+            p.lines.push(format!("a section made committed (OpenExistingHeapFromFileMapping): {}", hr(&opened)));
+            opened
+        } else {
+            let opened = open(&rig.device, From::Part(window.Value as usize, SIZE));
+            p.lines.push(format!("a section made committed, through a whole view of ours that stays (OpenExistingHeapFromAddress1, Wine): {}", hr(&opened)));
+            opened
+        };
         let mut unmapped = false;
         if let (Ok(heap), false) = (&opened, view.Value.is_null()) {
             p.lines.push(format!("  {}", describe(heap)));
@@ -1018,6 +1031,13 @@ unsafe fn section(p: &mut Probe, rig: &mut Rig) {
                 p.section_reads = rig.fetch(buffer, 0, 2 * K64).is_ok_and(|got| same(memory, &got));
                 let new: Vec<u8> = (0..K64).map(|i| (i as u8) ^ 0x33).collect();
                 p.section_writes = rig.store(buffer, 0, &new).is_ok() && same(memory, &new);
+                // A shader's store through unordered access, as the title's
+                // passes write their buffers.
+                memory.cast::<[u32; 3]>().write([40, 2, 0]);
+                let shaded = rig.shade(buffer.GetGPUVirtualAddress());
+                let shader = shaded.is_ok() && memory.cast::<[u32; 3]>().read()[2] == 42;
+                p.lines.push(format!("  a shader's store through unordered access shows in the title's view: {shader} ({})", hr(&shaded)));
+                p.section_writes &= shader;
                 // The guard of `watch.rs`: the view read-only.
                 let mut old = 0;
                 let guarded = mem::VirtualProtect(memory.cast(), K64, mem::PAGE_READONLY, &mut old) != 0;
@@ -1040,6 +1060,9 @@ unsafe fn section(p: &mut Probe, rig: &mut Rig) {
             }
         }
         drop(opened);
+        if !window.Value.is_null() {
+            mem::UnmapViewOfFile(window);
+        }
         if !unmapped && !view.Value.is_null() {
             mem::UnmapViewOfFile2(process, view, mem::MEM_PRESERVE_PLACEHOLDER);
         }
@@ -1082,7 +1105,9 @@ unsafe fn cost(p: &mut Probe, rig: &mut Rig, memory: &dyn Fn() -> Option<[u64; 4
         let handle = mem::CreateFileMappingW(invalid, std::ptr::null(), mem::PAGE_READWRITE | mem::SEC_COMMIT, (bytes as u64 >> 32) as u32, bytes as u32, std::ptr::null());
         if !handle.is_null() {
             let (set, account, started) = (working_set_mb(), shared(), std::time::Instant::now());
-            let opened = open(&rig.device, From::Section(handle as usize));
+            // Under Wine on a whole view of ours that stays (see `section`).
+            let window = if crate::wine::on() { mem::MapViewOfFile(handle, mem::FILE_MAP_ALL_ACCESS, 0, 0, bytes) } else { mem::MEMORY_MAPPED_VIEW_ADDRESS { Value: std::ptr::null_mut() } };
+            let opened = if window.Value.is_null() { open(&rig.device, From::Section(handle as usize)) } else { open(&rig.device, From::Part(window.Value as usize, bytes)) };
             let took = started.elapsed().as_secs_f64() * 1000.0;
             let (set_opened, account_opened) = (working_set_mb(), shared());
             let placed = opened.as_ref().ok().and_then(|heap| place(&rig.device, heap, 0, bytes as u64).ok());
@@ -1096,6 +1121,9 @@ unsafe fn cost(p: &mut Probe, rig: &mut Rig, memory: &dyn Fn() -> Option<[u64; 4
                 ms(speed)
             ));
             drop((placed, opened));
+            if !window.Value.is_null() {
+                mem::UnmapViewOfFile(window);
+            }
             windows_sys::Win32::Foundation::CloseHandle(handle);
         }
         // Today's kind of host copy, for the comparison.

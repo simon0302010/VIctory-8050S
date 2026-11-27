@@ -101,6 +101,8 @@ mod ab;
 mod tdr;
 #[cfg(windows)]
 mod texture;
+#[cfg(windows)]
+pub mod wine;
 pub mod timeline;
 #[cfg(windows)]
 pub mod titlewrite;
