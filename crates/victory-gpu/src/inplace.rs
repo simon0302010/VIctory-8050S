@@ -755,9 +755,11 @@ impl Rig {
     }
 
     /// A compute shader stores, through a root unordered-access view at
-    /// `gpu`, the sum of the buffer's first two words in its third.
+    /// `gpu`, the sum of the buffer's first two words in its third. Words
+    /// of a structured buffer, not a byte-address one: Wine's compiler has
+    /// no `Load` on `RWByteAddressBuffer`.
     fn shade(&mut self, gpu: u64) -> windows::core::Result<()> {
-        const SOURCE: &str = "#define RS \"UAV(u0)\"\nRWByteAddressBuffer b : register(u0);\n[RootSignature(RS)]\n[numthreads(1, 1, 1)]\nvoid main() { b.Store(8, b.Load(0) + b.Load(4)); }\n";
+        const SOURCE: &str = "#define RS \"UAV(u0)\"\nRWStructuredBuffer<uint> b : register(u0);\n[RootSignature(RS)]\n[numthreads(1, 1, 1)]\nvoid main() { b[2] = b[0] + b[1]; }\n";
         // Each step names itself when it fails: the verdict line keeps only
         // the error, and under Wine more than one step has failed here.
         let step = |what: &'static str| {
