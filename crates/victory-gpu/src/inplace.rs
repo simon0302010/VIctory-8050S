@@ -101,6 +101,12 @@ fn most() -> u64 {
 /// because of [`most`]; and what was let go because its memory changed.
 static STATS: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
 
+/// Bytes of title memory in place now (windows and title buffers), for the
+/// debug panel.
+pub(crate) fn bytes_in_place() -> u64 {
+    STATS[1].load(Ordering::Relaxed) + STATS[3].load(Ordering::Relaxed)
+}
+
 /// A buffer placed over title memory, and its heap.
 pub(crate) struct Placed {
     pub(crate) buffer: ID3D12Resource,

@@ -20,6 +20,27 @@ lighting that is too bright or too dark when walking indoors are next in line.
 copy of the game. It is not affiliated with or endorsed by the game's developer
 or publisher.
 
+## VIctory-8050S: Linux, Proton and the Radeon 8050S
+
+This fork targets one machine: a Framework Desktop with the Ryzen AI Max 385
+(Radeon 8050S, unified memory), on Linux through GE-Proton, run with
+victory-sandbox (`victory-sandbox build`, `run`). It runs
+the Series S profile unless told (`--console series-x`).
+
+What is different here, and why:
+
+| Piece | What it does |
+|---|---|
+| `linux/userptr-shim` | Preloaded into the game by victory-sandbox. libdrm asks the kernel for anonymous-only host imports, so RADV could not import Wine's sections (shared file mappings) and vkd3d-proton fell back, silently, to memory of its own. With the shim the title's page pool can be read and written by the card in place (`VICTORY_INPLACE_PROBE=1` checks it). `VICTORY_USERPTR_SHIM=0` leaves it out. |
+| `linux/wine` | wineserver keeps a process's memory views in a list and walks it on every map and unmap; the title keeps ~63,000 views of its page pool, so a map cost 0.2-2.3 ms and wineserver ran at 92% of a core. The patch indexes the views by address; `build-wineserver.sh` builds GE-Proton's own server with it into a copy of that GE-Proton. |
+| `linux/bench-scene.sh` | Runs the intro's 3D scene unattended (diagnostics build: Enter pressed by `VICTORY_KEYS`) and summarises the frame lines; extra switches from the environment. |
+| Debug panel | `VICTORY_PANEL=1` (or F3): the HUD has Linux rows: the card idle because the title had not submitted (`TITLE`) or because we worked (`OURS`), copying back; preparing's copies, texture refreshes and their waits for remaps; the title's page maps and unmaps a second and ms each; write-watch ms, guard faults, pipeline waits a frame; MB in place, Wine, and whether the shim is loaded. Rows turn orange where a frame is lost. |
+
+On this machine, all five renderer patches below matter more than on Windows
+(port 1 needs the shim under Wine). `VICTORY_MAP_THREADS=1` and
+`VICTORY_TEXTURE_NO_WAIT=1` halve the median frame while the view list is
+unpatched.
+
 ## Where it stands (2026-11-26)
 
 Tested on one machine only: Windows 11, Intel i9-12900K, 64 GB RAM, Radeon

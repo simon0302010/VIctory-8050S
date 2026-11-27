@@ -102,6 +102,11 @@ static BOUNDS: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
 /// touch it, their bytes.
 static STATS: [AtomicU64; 13] = [const { AtomicU64::new(0) }; 13];
 
+/// Bytes of the regions opened, for the debug panel.
+pub(crate) fn region_bytes() -> u64 {
+    STATS[1].load(Ordering::Relaxed)
+}
+
 /// Whether `[at, at + len)` may be ported: in the title's 32-bit graphics
 /// memory.
 pub(crate) fn wanted(at: u64, len: u64) -> bool {

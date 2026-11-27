@@ -1025,13 +1025,18 @@ enum Call {
     Commit = 13,
 }
 
-/// Runs `f`, a system call, and counts it while the streaming log is on.
+/// Runs `f`, a system call, and counts it while the streaming log is on
+/// (maps and unmaps always, for the debug panel).
 fn counted<T>(call: Call, f: impl FnOnce() -> T) -> T {
-    if !super::dstorage::stream_log::on() {
-        return f();
-    }
     let started = std::time::Instant::now();
     let done = f();
+    // For the debug panel, always: maps and unmaps are what Wine is slow at.
+    if matches!(call, Call::Map | Call::Unmap) {
+        victory_gpu::wine::note_map(matches!(call, Call::Unmap), started.elapsed().as_nanos() as u64);
+    }
+    if !super::dstorage::stream_log::on() {
+        return done;
+    }
     MAPPING[call as usize].fetch_add(1, Ordering::Relaxed);
     MAPPING[call as usize + 1].fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
     done

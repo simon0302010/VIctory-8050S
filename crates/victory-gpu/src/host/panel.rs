@@ -26,7 +26,7 @@ const GLYPH: (u32, u32) = (5, 7);
 
 /// Logical canvas dimensions (1x at <=1600p, 2x at 4K).
 const BASE_W: u32 = 540;
-const BASE_H: u32 = 334;
+const BASE_H: u32 = 434;
 
 /// How many recent frames the live frame-time graph keeps.
 const HISTORY: usize = 172;
@@ -422,7 +422,7 @@ impl CpuMeter {
 #[derive(Clone, Copy, Default)]
 struct Counters([u64; COUNTERS]);
 
-const COUNTERS: usize = 11;
+const COUNTERS: usize = 21;
 
 impl Counters {
     fn now() -> Counters {
@@ -432,6 +432,18 @@ impl Counters {
         let record_ns = crate::copystat::peek(crate::copystat::C::RecordNs);
         #[cfg(not(feature = "diagnostics"))]
         let record_ns = 0;
+        #[cfg(feature = "diagnostics")]
+        let (crate_copystat_watch_us, crate_copystat_guard_faults, crate_copystat_pipeline_wait_us) = (
+            crate::copystat::C::WatchUs,
+            crate::copystat::C::GuardFaults,
+            crate::copystat::C::PipelineWaitUs,
+        );
+        #[cfg(feature = "diagnostics")]
+        let diag = crate::copystat::peek;
+        #[cfg(not(feature = "diagnostics"))]
+        let (crate_copystat_watch_us, crate_copystat_guard_faults, crate_copystat_pipeline_wait_us) = ((), (), ());
+        #[cfg(not(feature = "diagnostics"))]
+        let diag = |_: ()| 0u64;
         Counters([
             super::worked(),
             get(&CARD_CLOCK_US[0]),
@@ -444,6 +456,20 @@ impl Counters {
             crate::draw::dropped_now(),
             record_ns,
             crate::draw::drawn(),
+            // The Linux rows: preparing's copies and texture refreshes (us),
+            // the title's page maps and unmaps (calls, ns), refreshes waiting
+            // for a remap (us), write-watch askings (us), guard faults,
+            // waits for host pipelines (us).
+            get(&PREPARING[0]),
+            get(&PREPARING[2]),
+            get(&crate::wine::TITLE_MAPS[0]),
+            get(&crate::wine::TITLE_MAPS[1]),
+            get(&crate::wine::TITLE_MAPS[2]),
+            get(&crate::wine::TITLE_MAPS[3]),
+            get(&crate::texture::REFRESH_WAITS[2]),
+            diag(crate_copystat_watch_us),
+            diag(crate_copystat_guard_faults),
+            diag(crate_copystat_pipeline_wait_us),
         ])
     }
 
@@ -488,6 +514,35 @@ struct Snapshot {
     sys_ram_total_gb: f64,
     sys_commit_gb: f64,
     history_ms: Vec<f32>,
+    linux: Linux,
+}
+
+/// The Linux rows: where a frame goes under Wine and Proton.
+#[derive(Default)]
+struct Linux {
+    /// The card idle while the title had not submitted (its own threads
+    /// stalled), while we worked, and our waits for the card; copying back.
+    title_ms: f64,
+    ours_ms: f64,
+    back_ms: f64,
+    /// Preparing: title memory copies and texture refreshes (all threads),
+    /// refreshes waiting for a remap to end.
+    copies_ms: f64,
+    textures_ms: f64,
+    remap_wait_ms: f64,
+    /// The title's page maps and unmaps a second, and milliseconds each.
+    maps_s: f64,
+    map_ms: f64,
+    unmaps_s: f64,
+    unmap_ms: f64,
+    /// Write-watch askings, guard faults, waits for pipelines, a frame.
+    watch_ms: f64,
+    faults: f64,
+    pipe_wait_ms: f64,
+    /// Title memory the card reads where the title has it.
+    in_place_mb: f64,
+    wine: bool,
+    shim: bool,
 }
 
 fn fps_color(fps: f64) -> [u8; 3] {
@@ -640,7 +695,39 @@ fn paint_hud(s: &Snapshot) -> Canvas {
     );
     c.text_sep(val_x, 308, 2, WHITE, &trunc(&ram_line, max_chars));
 
+    paint_linux(&mut c, &s.linux, val_x, max_chars);
     c
+}
+
+/// The Linux rows under the others: what holds a frame up under Wine.
+fn paint_linux(c: &mut Canvas, l: &Linux, val_x: u32, max_chars: usize) {
+    let warn = |bad: bool| if bad { ORANGE } else { WHITE };
+    c.rect(12, 328, BASE_W - 24, 1, SEP);
+    // Idle card: the title stalled / we worked; copying back.
+    c.text(14, 334, 2, LABEL, "IDLE");
+    let row = format!("TITLE {:.0} | OURS {:.0} | BACK {:.0}", l.title_ms, l.ours_ms, l.back_ms);
+    c.text_sep(val_x, 334, 2, warn(l.title_ms > 50.0), &trunc(&row, max_chars));
+    // Preparing, all threads.
+    c.text(14, 354, 2, LABEL, "PREP");
+    let row = format!("CPY {:.0} | TEX {:.0} | REMAP {:.0}", l.copies_ms, l.textures_ms, l.remap_wait_ms);
+    c.text_sep(val_x, 354, 2, warn(l.remap_wait_ms > 50.0), &trunc(&row, max_chars));
+    // The title's page maps: Wine's view list.
+    c.text(14, 374, 2, LABEL, "MAPS");
+    let row = format!("{:.0}/S {:.2}MS | UN {:.0}/S {:.2}MS", l.maps_s, l.map_ms, l.unmaps_s, l.unmap_ms);
+    c.text_sep(val_x, 374, 2, warn(l.map_ms > 0.1), &trunc(&row, max_chars));
+    // Write tracking and pipelines.
+    c.text(14, 394, 2, LABEL, "TRACK");
+    let row = format!("WW {:.0} | FLT {:.0} | PIPE {:.0}", l.watch_ms, l.faults, l.pipe_wait_ms);
+    c.text_sep(val_x, 394, 2, warn(l.watch_ms > 50.0), &trunc(&row, max_chars));
+    // In place, and the Linux pieces.
+    c.text(14, 414, 2, LABEL, "LINUX");
+    let row = format!(
+        "INPL {:.0}MB | {} | SHIM {}",
+        l.in_place_mb,
+        if l.wine { "WINE" } else { "WIN" },
+        if l.shim { "ON" } else { "OFF" }
+    );
+    c.text_sep(val_x, 414, 2, warn(l.wine && !l.shim), &trunc(&row, max_chars));
 }
 
 /// The buffers of a box that size and format.
@@ -834,6 +921,24 @@ impl Panel {
             sys_ram_total_gb: gb(sys_total),
             sys_commit_gb: gb(sys_commit),
             history_ms: self.history.iter().copied().collect(),
+            linux: Linux {
+                title_ms: ((c[1] - c[2]) / 1e3).max(0.0),
+                ours_ms: c[2] / 1e3,
+                back_ms: c[5] / 1e3,
+                copies_ms: c[11] / 1e3,
+                textures_ms: c[12] / 1e3,
+                remap_wait_ms: c[17] / 1e3,
+                maps_s: c[13] * fps,
+                map_ms: if c[13] > 0.0 { c[14] / c[13] / 1e6 } else { 0.0 },
+                unmaps_s: c[15] * fps,
+                unmap_ms: if c[15] > 0.0 { c[16] / c[15] / 1e6 } else { 0.0 },
+                watch_ms: c[18] / 1e3,
+                faults: c[19],
+                pipe_wait_ms: c[20] / 1e3,
+                in_place_mb: (crate::inplace::bytes_in_place() + crate::port::region_bytes()) as f64 / (1u64 << 20) as f64,
+                wine: crate::wine::on(),
+                shim: crate::wine::shim(),
+            },
         });
         self.changed = true;
         (self.since, self.frames, self.worst) = (now, 0, 0.0);
@@ -976,8 +1081,32 @@ mod tests {
             sys_ram_total_gb: 61.4,
             sys_commit_gb: 48.0,
             history_ms: vec![28.0, 31.0, 85.0, 32.0],
+            linux: Linux {
+                title_ms: 640.0,
+                ours_ms: 260.0,
+                back_ms: 33.0,
+                copies_ms: 125.0,
+                textures_ms: 19.0,
+                remap_wait_ms: 1708.0,
+                maps_s: 2240.0,
+                map_ms: 2.31,
+                unmaps_s: 1101.0,
+                unmap_ms: 1.46,
+                watch_ms: 1285.0,
+                faults: 291.0,
+                pipe_wait_ms: 500.0,
+                in_place_mb: 541.0,
+                wine: true,
+                shim: true,
+            },
         };
         let canvas = paint_hud(&snap);
+        // `VICTORY_PANEL_PPM=<file>`: the box as a picture, to look at.
+        if let Ok(path) = std::env::var("VICTORY_PANEL_PPM") {
+            let mut ppm = format!("P6\n{} {}\n255\n", BASE_W, BASE_H).into_bytes();
+            ppm.extend(canvas.rgb.iter().flatten());
+            std::fs::write(path, ppm).unwrap();
+        }
         for scale in [1u32, 2] {
             let (width, height) = size(scale);
             let pitch = (width * 4).next_multiple_of(256) as usize;
