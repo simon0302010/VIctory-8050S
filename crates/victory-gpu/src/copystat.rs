@@ -1153,20 +1153,49 @@ fn submitter(all: &mut Vec<(u32, Submitter)>, id: u32) -> &mut Submitter {
 
 /// List-call time by the call's place in our code (`with_state`'s caller):
 /// nanoseconds and calls, summed on each thread and sent here now and then.
-type Sites = HashMap<(&'static str, u32), (u64, u64)>;
+/// Also by part ([`mark`]): (file, line, label); the call as a whole has
+/// the label "".
+type Sites = HashMap<(&'static str, u32, &'static str), (u64, u64)>;
 static SITES: Mutex<Option<Sites>> = Mutex::new(None);
 
 thread_local! {
     static SITES_HERE: std::cell::RefCell<(Sites, u64)> = std::cell::RefCell::new((HashMap::new(), 0));
+    /// The list call under way on this thread: its place, and the last mark.
+    static CALL: std::cell::Cell<Option<(&'static std::panic::Location<'static>, std::time::Instant)>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// A list call begins at `started`, called from `at` ([`recorded_at`] ends it).
+pub(crate) fn call_begins(started: std::time::Instant, at: &'static std::panic::Location<'static>) {
+    CALL.set(Some((at, started)));
+}
+
+/// The part of the list call under way since its last mark (or its start)
+/// was `label`.
+pub(crate) fn mark(label: &'static str) {
+    let Some((at, last)) = CALL.get() else {
+        return;
+    };
+    let now = std::time::Instant::now();
+    CALL.set(Some((at, now)));
+    let ns = (now - last).as_nanos() as u64;
+    SITES_HERE.with(|h| {
+        let mut h = h.borrow_mut();
+        let e = h.0.entry((at.file(), at.line(), label)).or_insert((0, 0));
+        e.0 += ns;
+        e.1 += 1;
+    });
 }
 
 /// As [`recorded`], and the time summed by the call's place `at`.
 pub(crate) fn recorded_at(started: std::time::Instant, at: &'static std::panic::Location<'static>) {
+    mark("(after the last mark)");
+    CALL.set(None);
     let ns = started.elapsed().as_nanos() as u64;
     recorded(started);
     SITES_HERE.with(|h| {
         let mut h = h.borrow_mut();
-        let e = h.0.entry((at.file(), at.line())).or_insert((0, 0));
+        let e = h.0.entry((at.file(), at.line(), "")).or_insert((0, 0));
         e.0 += ns;
         e.1 += 1;
         h.1 += ns;
@@ -1191,20 +1220,26 @@ fn log_sites(frames: f64) {
     };
     let mut all: Vec<_> = all.into_iter().collect();
     all.sort_by_key(|&(_, (ns, _))| std::cmp::Reverse(ns));
-    let text: Vec<String> = all
-        .iter()
-        .take(14)
-        .map(|((file, line), (ns, n))| {
-            let file = file.rsplit(['/', '\\']).next().unwrap_or(file);
-            format!(
-                "{file}:{line} {:.1} ms in {:.0} ({:.1} us each)",
-                *ns as f64 / 1e6 / frames,
-                *n as f64 / frames,
-                *ns as f64 / 1e3 / (*n).max(1) as f64
-            )
-        })
-        .collect();
-    tracing::info!("  list calls by place (all threads, per frame; summed a few ms at a time): {}", text.join(", "));
+    let show = |((file, line, label), (ns, n)): &((&str, u32, &str), (u64, u64))| {
+        let file = file.rsplit(['/', '\\']).next().unwrap_or(file);
+        format!(
+            "{file}:{line}{}{label} {:.1} ms in {:.0} ({:.1} us each)",
+            if label.is_empty() { "" } else { " " },
+            *ns as f64 / 1e6 / frames,
+            *n as f64 / frames,
+            *ns as f64 / 1e3 / (*n).max(1) as f64
+        )
+    };
+    let calls: Vec<String> = all.iter().filter(|e| e.0.2.is_empty()).take(10).map(show).collect();
+    tracing::info!("  list calls by place (all threads, per frame; summed a few ms at a time): {}", calls.join(", "));
+    // The parts of the heaviest places.
+    for top in all.iter().filter(|e| e.0.2.is_empty()).take(4) {
+        let parts: Vec<String> =
+            all.iter().filter(|e| !e.0.2.is_empty() && e.0.0 == top.0.0 && e.0.1 == top.0.1).take(14).map(show).collect();
+        if !parts.is_empty() {
+            tracing::info!("  list calls by place, parts: {}", parts.join(", "));
+        }
+    }
 }
 
 /// A list call on this thread that began at `started` has returned.

@@ -154,9 +154,15 @@ pub(crate) fn with_state(this: This, f: impl FnOnce(&crate::host::HostList, &mut
     let Some(list) = host_list(this) else { return };
     #[cfg(feature = "diagnostics")]
     let started = std::time::Instant::now();
+    #[cfg(feature = "diagnostics")]
+    crate::copystat::call_begins(started, std::panic::Location::caller());
     // SAFETY: the title passes one of our lists.
     let state = unsafe { &(*this.cast::<List>()).state };
-    f(list, &mut state.lock().unwrap_or_else(|e| e.into_inner()));
+    let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
+    #[cfg(feature = "diagnostics")]
+    crate::copystat::mark("the state's lock");
+    f(list, &mut state);
+    drop(state);
     #[cfg(feature = "diagnostics")]
     crate::copystat::recorded_at(started, std::panic::Location::caller());
 }

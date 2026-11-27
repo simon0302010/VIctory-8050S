@@ -1462,6 +1462,8 @@ impl State {
             return false;
         }
         let l = &list.list;
+        #[cfg(feature = "diagnostics")]
+        crate::copystat::mark("bind: twins written");
         // Vertex buffers the input layout reads.
         let mut views = [D3D12_VERTEX_BUFFER_VIEW::default(); 32];
         let mut count = 0;
@@ -1503,6 +1505,8 @@ impl State {
             // SAFETY: an open list; the view names a live host buffer.
             unsafe { l.IASetIndexBuffer(Some(&view)) };
         }
+        #[cfg(feature = "diagnostics")]
+        crate::copystat::mark("prepare: vertex and index buffers");
         const RENDER_TARGET: u32 = 0x4;
         for &t in &self.targets {
             crate::list::ensure_state(list, t as This, RENDER_TARGET);
@@ -1541,6 +1545,8 @@ impl State {
         let l = &list.list;
         // Textures picked by index, before anything asks for them.
         self.early_textures(list, p, compute);
+        #[cfg(feature = "diagnostics")]
+        crate::copystat::mark("bind: textures picked by index");
         if crate::host::walls_trace() {
             self.walls_census(p, compute);
         }
@@ -1627,6 +1633,8 @@ impl State {
             // The title may release the pipeline before it submits the list.
             list.bind_pipeline(&p.name, &p.pso, &p.root);
         }
+        #[cfg(feature = "diagnostics")]
+        crate::copystat::mark("bind: heaps, root signature, pipeline");
         for stage in &p.stages {
             let t = stage.translated();
             STORES.set(t.stores);
@@ -1635,6 +1643,8 @@ impl State {
             }
             let made = self.tables(list, &t.tables, compute);
             STORES.set(true);
+            #[cfg(feature = "diagnostics")]
+            crate::copystat::mark("bind: descriptor tables");
             if made.iter().any(|m| m.1 == u32::MAX) {
                 once!("a draw whose descriptor table found no free slots is dropped");
                 return false;
@@ -1664,6 +1674,8 @@ impl State {
             } else {
                 None
             };
+            #[cfg(feature = "diagnostics")]
+            crate::copystat::mark("bind: title memory by address");
             if let Some((param, dwords)) = stage.user_data {
                 // (A root signature holds 64 dwords.)
                 let mut room = [0u32; 64];
@@ -1782,6 +1794,8 @@ impl State {
                     }
                 }
             }
+            #[cfg(feature = "diagnostics")]
+            crate::copystat::mark("bind: user data, root CBVs and SRVs");
             for &(slot, param) in &stage.root_uavs {
                 if slot == victory_shader::emit::SLOT_FAULTS {
                     // Ours: where shaders note the pages they found empty.
@@ -1810,6 +1824,8 @@ impl State {
                 }
             }
         }
+        #[cfg(feature = "diagnostics")]
+        crate::copystat::mark("bind: root UAVs");
         // Depth textures it writes through unordered access: their colour
         // twins hold what they lack from here on.
         list.twins_written();
@@ -3432,12 +3448,16 @@ impl State {
                 fresh[usize::from(slot / 64)] |= 1u64 << (slot % 64);
             }
         }
+        #[cfg(feature = "diagnostics")]
+        crate::copystat::mark("tables: which need fresh slots");
         for &(g, e) in &plan.direct {
             let group = &plan.groups[g];
             if !selected_slot(&fresh, group.slot) {
                 self.table_entry(list, &group.entries[e], compute);
             }
         }
+        #[cfg(feature = "diagnostics")]
+        crate::copystat::mark("tables: direct entries");
         let mut made = Few::default();
         for group in &plan.groups {
             let slot = group.slot;
@@ -3491,6 +3511,8 @@ impl State {
                 }
                 (table, n, h.0)
             };
+            #[cfg(feature = "diagnostics")]
+            crate::copystat::mark("tables: reading and hashing a table");
             // Who reads of it, and as what, as far as [`readable`] goes by it.
             let reader = (std::ptr::from_ref(plan) as usize, plan.direct.len(), STORES.get(), TESTED_DEPTH.get().0);
             if let Some(known) = self.fresh_tables.get_mut(&key) {
@@ -3541,6 +3563,8 @@ impl State {
                         known.ready.push((reader, depth));
                     }
                 }
+                #[cfg(feature = "diagnostics")]
+                crate::copystat::mark("tables: a table made before in the list");
                 made.push((slot, first * 32));
                 continue;
             }
@@ -3570,6 +3594,8 @@ impl State {
                 self.recording = NEXT.fetch_add(1, Ordering::Relaxed);
             }
             let recording = self.recording;
+            #[cfg(feature = "diagnostics")]
+            crate::copystat::mark("tables: a new table: slots");
             // The whole range: a shader may index past the entries its
             // used-resource list names (descriptor arrays).
             for k in 0..n {
@@ -3611,11 +3637,15 @@ impl State {
                             host.mirror_after(list, title + k, table + u64::from(k) * 32);
                         }
                     }
+                    #[cfg(feature = "diagnostics")]
+                    crate::copystat::mark("tables: a new table: a view the list made before");
                     if was != (listed.ready, listed.tabled) {
                         crate::descriptor::host::note_listed(recording, words, listed);
                     }
                     continue;
                 }
+                #[cfg(feature = "diagnostics")]
+                crate::copystat::mark("tables: a new table: looking a view up");
                 let used = group.entry(k);
                 match crate::descriptor::view(table + u64::from(k) * 32) {
                     Some(View::Constant(address, size)) => {
@@ -3671,6 +3701,8 @@ impl State {
                     }
                 }
             }
+            #[cfg(feature = "diagnostics")]
+            crate::copystat::mark("tables: a new table: views made (constants, make_at)");
             made.push((slot, first * 32));
         }
         made
@@ -4050,6 +4082,8 @@ impl State {
             why("mesh draws are switched off (VICTORY_MESH_TEST=skip)");
             return false;
         }
+        #[cfg(feature = "diagnostics")]
+        crate::copystat::mark("indirect: finding the buffers");
         // One record without a count: clamped in a batch (`batches`).
         let batch = if batches() > 0 && max == 1 && count.is_none() {
             args.refresh(list, arguments, len);
@@ -4141,6 +4175,8 @@ impl State {
                 (bounded, 0)
             }
         };
+        #[cfg(feature = "diagnostics")]
+        crate::copystat::mark("indirect: refreshes and the clamp");
         let ran = match kind {
             DRAW | INDEXED => self.prepare(list, kind == INDEXED),
             MESH => self.prepare_for(list, false, true),
@@ -4385,6 +4421,8 @@ impl RecordHash {
 }
 
 fn readable(list: &HostList, kind: ResourceType, view: &View) {
+    #[cfg(feature = "diagnostics")]
+    crate::copystat::mark("tables: (before a view made readable)");
     const UNORDERED_ACCESS: u32 = 0x8;
     let placed = crate::descriptor::host::placed_texture(view);
     let view = placed.as_ref().unwrap_or(view);
@@ -4408,6 +4446,8 @@ fn readable(list: &HostList, kind: ResourceType, view: &View) {
             }
         }
     }
+    #[cfg(feature = "diagnostics")]
+    crate::copystat::mark("readable: buffer views (refresh, writes)");
     match (view, kind) {
         (View::Shader(resource, _), ResourceType::Srv) => {
             // A view the title placed, in another format, in the memory of
@@ -4466,7 +4506,8 @@ fn readable(list: &HostList, kind: ResourceType, view: &View) {
             }
         }
         _ => {}
-    }
+    }    #[cfg(feature = "diagnostics")]
+    crate::copystat::mark("readable: textures (uploads, states)");
 }
 
 /// The pixel shaders whose draws get their slots listed
