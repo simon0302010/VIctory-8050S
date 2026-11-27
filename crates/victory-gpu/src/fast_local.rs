@@ -140,11 +140,13 @@ impl<T: 'static> FastLocal<RefCell<T>> {
 /// A word per thread kept in the TLS slot itself: nothing is allocated, so
 /// the global allocator may use it. 0 until the thread sets it.
 #[cfg(windows)]
+#[cfg_attr(not(feature = "diagnostics"), allow(dead_code))]
 pub(crate) struct FastWord {
     key: AtomicU32,
 }
 
 #[cfg(windows)]
+#[cfg_attr(not(feature = "diagnostics"), allow(dead_code))]
 impl FastWord {
     pub(crate) const fn new() -> Self {
         FastWord { key: AtomicU32::new(NONE) }

@@ -3,6 +3,8 @@
 //! Every command reads the user's own files and writes only to stdout or to
 //! the user's cache directory (outside the repository).
 
+#[cfg(all(windows, target_arch = "x86_64"))]
+mod fastmem;
 mod census;
 mod inspect;
 #[cfg(all(windows, feature = "diagnostics"))]
