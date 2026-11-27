@@ -80,6 +80,7 @@ VICTORY_X=1 linux/bench-scene.sh ...  # extra switches come from the environment
 
 - **Never `pkill -f 'victory.exe run'`**: it matches the calling shell's own command line and kills the tool call (exit 144). Use `pkill -f '[v]ictory.exe run'`.
 - Foreground `sleep` in tool calls is blocked; inside scripts it is fine.
+- **`victory-sandbox run --rt` (ray tracing) crashed the user's window manager (Hyprland) on 2026-11-27. Do not run with ray tracing unless the user asks.**
 - Long jobs (builds, warm-up): run in background and wait for the notification; do not poll.
 - Running downloaded scripts (e.g. GE's prep script) was refused once by the auto-mode classifier; the user then explicitly allowed patching/building wineserver. Ask before running other third-party build scripts.
 - `victory-sandbox` passes only `VICTORY_*, PROTON_*, VKD3D_*, DXVK_*, RADV_*, MESA_*, AMD_*, WINEDEBUG` into the sandbox (plus LD_PRELOAD for the shim).
