@@ -61,6 +61,7 @@ VICTORY_X=1 linux/bench-scene.sh ...  # extra switches come from the environment
 - Tests needing Windows APIs: build `cargo test --release --target x86_64-pc-windows-gnu -p <crate> --lib --no-run`, copy the `.exe` from `target/x86_64-pc-windows-gnu/release/deps/` into `~/.local/share/victory-sandbox/runtime/`, run `cd ~; victory-sandbox exec proton run 'Z:\victory\<name>.exe' <filter> --ignored --nocapture --test-threads 1`.
   - `xmem` test `view_scaling` (victory-hle): Wine view map cost vs view count.
   - `panel` test `a_box_is_painted` with `VICTORY_PANEL_PPM='Z:\victory\logs\panel.ppm'` dumps the HUD; convert to PNG with a small python zlib script and view it.
+- **Sound off for every run we start** (user's request, 2026-11-27): `victory-sandbox run --no-audio`; `bench-scene.sh` does it.
 - `bench-scene.sh` presses Enter every 5 s (`VICTORY_KEYS`), waits for N
   frame lines with ≥100 draws, kills the game, summarizes. The 3D scene
   starts ~35 s in. Runs vary a lot (streaming): **always do ≥2-3 runs** and

@@ -20,7 +20,7 @@ keys=$(seq 10 5 200 | sed 's/$/:Enter/' | paste -sd,)
   "${VICTORY_PORT_GUARD:=1}" "${VICTORY_PORT_JOURNAL:=1}"
 export VICTORY_PORT_CONSTANTS VICTORY_PORT_DESCRIPTORS VICTORY_PORT_CBV VICTORY_PORT_GUARD VICTORY_PORT_JOURNAL
 
-VICTORY_KEYS=$keys timeout 600 victory-sandbox run >/dev/null 2>&1 &
+VICTORY_KEYS=$keys timeout 600 victory-sandbox run --no-audio >/dev/null 2>&1 &
 runner=$!
 
 in_game() { grep -cE 'INFO.*victory_gpu::host.* fps, .* [0-9]{3,} draws/frame' "$1" 2>/dev/null; true; }
