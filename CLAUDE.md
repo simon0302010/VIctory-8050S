@@ -170,6 +170,23 @@ over: descriptor lookup (`descriptor::view`, `record_at`/`make_listed`),
 hotspot at this granularity → needs a sampling profile (perf) to go
 further.
 
+**perf works** (user ran `sysctl kernel.perf_event_paranoid=-1`; resets on
+reboot). Recipe: start `linux/bench-scene.sh`, once in game `perf record -a
+-F 1999 -- sleep 20`, then `perf script -F comm,tid,ip,dso`. victory.exe
+is not at its preferred base (0x140000000) under Wine: take the base from
+`/proc/<pid>/maps` (the mapping of victory.exe at file offset 0), RVA = ip −
+base, names from `x86_64-w64-mingw32-nm -C` (or addr2line with line
+tables); its code shows as anon (`perf-<pid>.map`), mixed with the title's
+own code (outside victory.exe's range). Profile 1 (before fast_local), 20 s
+all CPUs: title code ≈2.6 cores, ours ≈2.9, kernel ≈2. Ours: 13.7% std
+`thread_local` `guard::enable` (fixed: `fast_local.rs`, commit `11e135d`),
+then safe_copy/merge ~19%, `State::tables` ~5-7%, zlib+bcpack (streaming)
+~6%, XMA/Opus audio decoding ~9% (runs even with `--no-audio`), SipHash
+~2.5%. After fast_local: ours −11% samples; per-thread: 5 recorders ~31%
+of a core each, title main thread 63%, **vkd3d_queue 38% (36% in kernel:
+`hmm_vma_walk_pmd`/`vm_normal_page`, amdgpu re-validating userptr BOs on
+every CS)** — no thread saturated any more: the frame is latency-bound.
+
 Negative results (keep, do not retry blindly):
 - Copy-mapping the page pool instead of Wine views: impossible, 96% of mapped pages are aliases (shown elsewhere already; the title maps pages into a pool view and the GPU's `CopyPageMappings` aliases them into tiled heaps).
 - `VICTORY_INPLACE=1` alone: 356 MB in place, no fps change (most memory is page pool = view memory, which `inplace` refuses).
