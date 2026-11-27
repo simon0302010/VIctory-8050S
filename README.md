@@ -65,8 +65,13 @@ more (several runs each: the scene streams, runs differ):
 | + **patched wineserver** | 94-103 | about 10 fps |
 | + card compare fixed for Wine, `VICTORY_CARD_BUFFERS_MIN_MB=1` | **76-122** (3 runs) | 8-13 fps; one 6 s stall right after the world loads in one run |
 
-Where a frame goes now (debug panel, frame lines): the title's own threads
-and our submitting thread take turns; the card is busy about 20% of a frame.
+Where a frame goes now (frame lines, once the world has streamed in: 55-80
+ms, up to 18 fps): the card is busy about 63% of a frame (~35 ms); of the
+~21 ms it idles, ~16 ms is our submitting thread preparing (refreshes of
+title memory copies ~14 ms) and ~5 ms the title not submitting; the
+submitting thread also waits ~17 ms a frame for the card. Right after the
+world loads, most runs have one stall of several seconds (the card and the
+copy-back thread waiting; no GPU fault in the kernel log): next to look at.
 
 What was found on the way, measured:
 
