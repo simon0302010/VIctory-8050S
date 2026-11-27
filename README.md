@@ -84,9 +84,17 @@ What was found on the way, measured:
 - **Mapping by copying is no way out**: 96% of the pages the title maps are
   shown at another address already, so copies would part.
 - **In place for everything** (`VICTORY_PORT_ALL=1` with `VICTORY_INPLACE=2`)
-  puts 1.3 GB in place, but the latter needs `VICTORY_LATE_WAIT=0`, and every
-  submission then waits for the card: worse for now (539 ms median, before
-  the wineserver patch).
+  puts 1.3 GB in place. With `VICTORY_LATE_WAIT=0` (which its docs ask for)
+  every submission waits for the card (539 ms median, before the wineserver
+  patch). With late wait kept, on the patched server, the card becomes the
+  limit: busy 98-100% of the frame and a median of 255-271 ms, against
+  94-103 ms with copies. A copy out of in-place memory is barely slower than
+  out of a buffer of ours (probe: 0.9 against 0.7 ms for 64 MB), so the
+  suspect is not the memory but its upkeep: under Wine write watching and the
+  guards change page protections, every change invalidates the card's import
+  of those pages (the kernel's userptr notifier), and the driver faults the
+  range in again before the next submission. In place pays only for memory
+  nothing guards. `VICTORY_PORT_ALL=1` alone: no change (95-108 ms).
 
 ## What this fork adds
 
