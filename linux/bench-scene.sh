@@ -15,10 +15,7 @@ logs=~/.local/share/victory-sandbox/runtime/logs
 old=$(cat "$logs/latest.txt" 2>/dev/null)
 keys=$(seq 10 5 200 | sed 's/$/:Enter/' | paste -sd,)
 
-# Renderer patches on unless the caller set them.
-: "${VICTORY_PORT_CONSTANTS:=1}" "${VICTORY_PORT_DESCRIPTORS:=1}" "${VICTORY_PORT_CBV:=1}" \
-  "${VICTORY_PORT_GUARD:=1}" "${VICTORY_PORT_JOURNAL:=1}"
-export VICTORY_PORT_CONSTANTS VICTORY_PORT_DESCRIPTORS VICTORY_PORT_CBV VICTORY_PORT_GUARD VICTORY_PORT_JOURNAL
+# (The renderer patches come from victory's Linux defaults, apps/victory/src/main.rs.)
 
 VICTORY_KEYS=$keys timeout 600 victory-sandbox run --no-audio >/dev/null 2>&1 &
 runner=$!

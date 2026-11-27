@@ -195,7 +195,14 @@ const LINUX_DEFAULTS: [(&str, &str); 8] = [
     // before): snapshots and CPU compares of what shaders wrote, 24 ms and
     // 531 MB a frame, go to 1.9 ms and 34 MB.
     ("VICTORY_CARD_BUFFERS_MIN_MB", "1"),
-    ("VICTORY_PORT_CONSTANTS", "1"),
+    // Renderer port 1 off: its one region (185 MB of the title's graphics
+    // memory) is a userptr import, which amdgpu walks page by page at every
+    // submission (36% of a core on vkd3d's queue thread) and invalidates
+    // whenever the title or write watching changes a mapping or protection
+    // in it. Runs with it had stalls of 0.3-1.3 s a frame after the world
+    // loaded (4 of 4), runs without none (2 of 2: worst line 120 ms); once
+    // streamed in both run 72-76 ms a frame (2026-11-27).
+    ("VICTORY_PORT_CONSTANTS", "0"),
     ("VICTORY_PORT_DESCRIPTORS", "1"),
     ("VICTORY_PORT_CBV", "1"),
     ("VICTORY_PORT_GUARD", "1"),

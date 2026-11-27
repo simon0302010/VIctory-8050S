@@ -64,6 +64,7 @@ more (several runs each: the scene streams, runs differ):
 | + one mapping thread, texture refreshes that do not wait for remaps | 289-435 | this fork's defaults under Wine |
 | + **patched wineserver** | 94-103 | about 10 fps |
 | + card compare fixed for Wine, `VICTORY_CARD_BUFFERS_MIN_MB=1` | **76-122** (3 runs) | 8-13 fps; one 6 s stall right after the world loads in one run |
+| + renderer port 1 off, thread-locals without std's guard (`fast_local`) | **73-79** (5 runs; means 77-94) | ~13 fps; no stall after loading (with port 1: means 153-356, 0.3-1.3 s frames in 4 of 4 runs) |
 
 Where a frame goes now (frame lines, once the world has streamed in: 55-80
 ms, up to 18 fps): the card is busy about 63% of a frame (~35 ms); of the
@@ -86,6 +87,25 @@ resolution would win little now; the frame is lost on the CPU side and in
 waits (each submission and wait for it costs at least ~270 us under Wine).
 
 What was found on the way, measured:
+
+- **Renderer port 1's userptr import stalls the card and the title.** Its
+  one region (185 MB of the title's graphics memory, the only userptr in the
+  process) is walked page by page by amdgpu at every command submission
+  (`hmm_range_fault`: 36% of a core on vkd3d's queue thread, perf), and the
+  kernel invalidates it whenever a mapping or protection in it changes
+  (streaming, write watching, guards). Every run with it had frames of 0.3-1.3
+  s after the world loaded; without it none, at the same steady frame time.
+  Off by default now. (This is also the likely reason in-place memory was
+  slow before.)
+- **std's thread-locals on windows-gnu** run a guard with two locked
+  operations on one process-wide counter and an `FlsSetValue` at every access:
+  13.7% of the CPU time in our code, the five recording threads fighting over
+  one cache line. `crates/victory-gpu/src/fast_local.rs` reads the TEB slot
+  directly.
+- **The card is not the limit**: its own work is 25-33 ms a frame (title
+  21-29 ms), see below. No thread is saturated any more either (perf: the
+  recording threads ~31% of a core each, the title's main thread 63%): the
+  frame is the threads waiting for each other.
 
 - **Wine's view list.** The title shows its page pool through ~63,000 views
   of 64 KiB and maps some 2,000 pages a second. wineserver keeps a process's

@@ -43,6 +43,8 @@ decided, update the relevant section here **and** the README, then commit.
 | Upstream sources for reference/building | `/home/simon/Dokumente/Rust/victory/upstream-src/` : `vkd3d-proton` (at cae8353e), `proton-wine` (ValveSoftware proton_11.0, sparse), `ge-proton` (GE-Proton11-14 tag with `wine`, `wine-staging`, `wineopenxr` submodules; `build-server/` holds our wineserver build) |
 | cool_fox (source of the 5 cherry-picked commits) | `https://github.com/DoubleGhosty/cool_fox` |
 
+Linux defaults now include `VICTORY_PORT_CONSTANTS=0` (port 1 off).
+
 Current sandbox settings: `repo` = this checkout, `proton` = the `-victory`
 copy, `build_args = -p victory --features diagnostics` (needed for
 `VICTORY_KEYS`, debug panel extras, copystat lines).
@@ -119,7 +121,8 @@ victory-sandbox repo: `e1626b1` original, `e26e367` builds/preloads the shim.
 | Ports 1,2,5,6,7 (+shim) | 943 |
 | + MAP_THREADS=1, TEXTURE_NO_WAIT=1 | 289-435 |
 | + patched wineserver | 94-103 (those two switches then irrelevant: 99-103 either way) |
-| + card compare + CARD_BUFFERS_MIN_MB=1 | **76-122** (3 runs); 55-80 steady after streaming, up to 18 fps |
+| + card compare + CARD_BUFFERS_MIN_MB=1 | 76-122 (3 runs); 55-80 steady after streaming, up to 18 fps |
+| + port 1 off, fast_local | **73-79** (5 runs), means 77-94, no post-load stall |
 
 Micro: Wine view map with 1k/65k views: 25/210 µs before, 15/8.4 µs after patch; unmap+map at 65k: 506 → 9.9 µs. In game before: ~2,240 maps/s, ~1,100 unmaps/s at ~2.3/1.5 ms each; wineserver at 92% of a core.
 
@@ -186,6 +189,18 @@ then safe_copy/merge ~19%, `State::tables` ~5-7%, zlib+bcpack (streaming)
 of a core each, title main thread 63%, **vkd3d_queue 38% (36% in kernel:
 `hmm_vma_walk_pmd`/`vm_normal_page`, amdgpu re-validating userptr BOs on
 every CS)** — no thread saturated any more: the frame is latency-bound.
+
+**Step 4 (post-load stall) found (2026-11-27):** renderer port 1's region
+is the only userptr BO (185 MB; `VICTORY_USERPTR_SHIM_LOG=1` lines land in
+the run log). amdgpu `hmm_range_fault`s every userptr BO at every CS (RADV
+puts all BOs in every submission) and its MMU notifier fires on any
+mapping/protection change in the range. Port 1 on: 4/4 runs had 0.3-1.3 s
+frame lines after loading (means 153-356); off: 4/4 runs none (means 77-94),
+steady state equal (72-79). Linux default `VICTORY_PORT_CONSTANTS=0` now
+(commit after `6cb8a6a`); bench-scene.sh no longer forces the port
+switches. Consequence for in place (step 3 structural idea): any userptr
+import pays per-CS page walks proportional to its size; in place needs
+driver-allocated memory mapped into the title instead of imports.
 
 Negative results (keep, do not retry blindly):
 - Copy-mapping the page pool instead of Wine views: impossible, 96% of mapped pages are aliases (shown elsewhere already; the title maps pages into a pool view and the GPU's `CopyPageMappings` aliases them into tiled heaps).
