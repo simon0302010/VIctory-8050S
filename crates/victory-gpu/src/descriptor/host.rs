@@ -2849,15 +2849,7 @@ impl HostHeap {
             }
         }
         let stride = view.and_then(view_stride);
-        let kind = view.map_or(0, view_kind);
-        if let Some((_, _, data)) = &self.strides
-            && index < victory_shader::emit::SLOT_STRIDES_COUNT
-        {
-            // SAFETY: inside the mapping; shaders read it while we write (a
-            // dword, either value is one the slot had).
-            unsafe { (*data as *mut u32).add(index as usize).write_volatile(stride.unwrap_or(0) | kind) };
-            write_view_address(*data, index, view);
-        }
+        self.note_view_word(index, view);
         let was = if stride.is_some() {
             self.buffers.put(index);
             true
@@ -2896,9 +2888,29 @@ impl HostHeap {
         }
     }
 
+    /// Slot `index`'s dword of the view-stride table (its stride and format
+    /// kind, `victory_shader::emit::SLOT_STRIDES`) and its view address, from
+    /// `view` (`None`: nothing there). Shaders read them by heap index: of
+    /// views they pick from the heap, and of views in tables, whose d16
+    /// accesses keep an integer format's bits (`VIEW_INTEGER`).
+    fn note_view_word(&self, index: u32, view: Option<&View>) {
+        if let Some((_, _, data)) = &self.strides
+            && index < victory_shader::emit::SLOT_STRIDES_COUNT
+        {
+            let word = view.and_then(view_stride).unwrap_or(0) | view.map_or(0, view_kind);
+            // SAFETY: inside the mapping; shaders read it while we write (a
+            // dword, either value is one the slot had).
+            unsafe { (*data as *mut u32).add(index as usize).write_volatile(word) };
+            write_view_address(*data, index, view);
+        }
+    }
+
     /// Makes slot `index` (a dynamic one) from `view`; a null view if the
     /// host cannot.
     pub(crate) fn make_at(&self, index: u32, view: &View) {
+        // Dynamic slots are table entries too: their stride-table dword is
+        // what a table's d16 access asks (the face network's UINT views).
+        self.note_view_word(index, Some(view));
         let kept = make_twinned(view, self.at(index), self.twin(index));
         if kept.is_none() {
             null_for(view, self.at(index));
@@ -2946,6 +2958,7 @@ impl HostHeap {
                 views.made.insert(words, ListView { view, at, twin, kept, listed });
             }
             let made = &views.made[&words];
+            self.note_view_word(index, Some(&made.view));
             self.copy_from(index, views.slot(made.at));
             if made.twin && twins {
                 self.copy_from(self.raw + index, views.slot(made.at + 1));
@@ -2975,6 +2988,7 @@ impl HostHeap {
         if self.sampler {
             self.null_sampler(index);
         } else {
+            self.note_view_word(index, None);
             null_view(self.at(index));
             self.put(index);
         }
