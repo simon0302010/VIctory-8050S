@@ -289,6 +289,19 @@ merge of upstream/main: 72 files in conflict (host.rs 63 hunks, draw.rs 46,
 descriptor/host.rs 30). Single DexNom fixes (921d8d3b sparse textures) don't
 apply either. Integer-target blending (DexNom ddb73326) we already have.
 
+Follow-up (2026-11-28): merged `port-fixes` (5 fixes from trustno1's fork:
+placed-view padding, BC7 rotation, raw view clamp, dynamic slots per heap,
+ambient violet) — heads still missing. Then `d583dc23`: d16 typed accesses
+through UINT views in **descriptor tables** now keep their bits (before
+only heap-picked views; host writes the stride-table dword for dynamic
+slots too). Upstream's `stride_tests` ported (`emit/stride_tests.rs`), all
+pass on RADV — so RADV passes the bits; but **heads still missing** (user,
+in game). So the face network's 16-bit path is not (or not the only) cause.
+Unknown: which pipelines are the face network (`compute_graph_ops:*` inside
+the title's .rpf archives; our logs have only hashes) and whether they run.
+Test-suite note: `emit::tests::stub_pipeline_is_created` fails under
+vkd3d-proton (it does not check DXIL hashes) — not a regression.
+
 ## 8. Plan (agreed direction: playable 30 fps first, then picture)
 
 Next steps in order; the user asked to start with step 1 when resuming.
