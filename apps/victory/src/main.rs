@@ -191,7 +191,7 @@ enum Console {
 /// the median frame (linux/bench-scene.sh). `VICTORY_LINUX_DEFAULTS=0` leaves
 /// everything as upstream has it.
 #[cfg(windows)]
-const LINUX_DEFAULTS: [(&str, &str); 9] = [
+const LINUX_DEFAULTS: [(&str, &str); 10] = [
     // Title buffers of 1 MiB or more get copies in the card's memory, whose
     // changes the card itself finds (the compare, which Wine could not make
     // before): snapshots and CPU compares of what shaders wrote, 24 ms and
@@ -215,6 +215,11 @@ const LINUX_DEFAULTS: [(&str, &str); 9] = [
     // waiting a frame): medians of the streamed-in frames 67-70 ms against
     // 78-80 (2 runs each, 2026-11-27).
     ("VICTORY_CARD_STEPS", "1"),
+    // The stand-in for the indirect light the title traces rays for
+    // (crate::ambient): with ray tracing off, rooms and faces got only
+    // direct light, black wherever no lamp or sun reaches. Screenshots
+    // with and without, intro scene (2026-11-27); the user: "way better".
+    ("VICTORY_AMBIENT", "1"),
     ("VICTORY_MAP_THREADS", "1"),
     ("VICTORY_TEXTURE_NO_WAIT", "1"),
 ];

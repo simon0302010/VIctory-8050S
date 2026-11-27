@@ -263,6 +263,32 @@ Next ideas, by expected gain:
 4. Port 1 / in place done right: driver-allocated memory mapped into the
    title instead of userptr imports (any userptr costs a page walk per CS).
 
+## 7c. Picture survey (2026-11-27, late)
+
+Screenshots: `VICTORY_CAPTURE='Z:\victory\logs\<dir>' VICTORY_CAPTURE_WORLD=1
+VICTORY_CAPTURE_WORLD_ALSO=200,400,...` (half-size PNGs + `-ops.txt` per
+world-relative frame listing every draw and drop) in runtime/logs/shots-*.
+Found and fixed:
+- Interiors/faces black: the indirect-light stand-in `VICTORY_AMBIENT` was
+  off; now a Linux default `1`.
+- 6 compute pipelines skipped as "the driver's compiler crashed on it before"
+  (in `cache/pipelines/warm-bad.txt`: "hung for 180 s" in an old warm-up);
+  they build fine now (`VICTORY_WARM_BAD=0` run). File emptied, backup
+  `warm-bad.txt.bak-2026-11-27`.
+Still wrong (user confirms; existed before this session):
+- **Heads missing** for most characters (hair, eyebrows, eyeballs, teeth float),
+  some faces fine; skin elsewhere green (arms/neck, frame 2836 of
+  shots-warmbad). No draw is dropped except the RT structure builder (ops
+  files): heads are drawn but invisible → likely texture/descriptor data
+  wrong (e.g. an alpha/dither mask reading 0), not missing pipelines.
+- **Black noise** on textures and floors; **black triangles/planes** blinking.
+- Checkerboard/comb artifacts on some surfaces (shadow edges, windows).
+Other forks (trustno1-coder/VIctory-NVIDIA, DexNom/VIctory, Marvisak/VIctory
+upstream 479 commits past our base) look right on their hardware. A trial
+merge of upstream/main: 72 files in conflict (host.rs 63 hunks, draw.rs 46,
+descriptor/host.rs 30). Single DexNom fixes (921d8d3b sparse textures) don't
+apply either. Integer-target blending (DexNom ddb73326) we already have.
+
 ## 8. Plan (agreed direction: playable 30 fps first, then picture)
 
 Next steps in order; the user asked to start with step 1 when resuming.
