@@ -153,6 +153,23 @@ mostly idle (between submissions 52 ms, 4 ms of it running). ⇒ Step 3 must
 cut list-call CPU first. `VICTORY_CARD_STEPS=1/2` (the fills/copies done on
 the card) not yet tried.
 
+**Step 3 so far (2026-11-27): where list-call CPU goes.** Diagnostics
+builds log `list calls by place` (`with_state` is `track_caller`) and `list
+calls by place, parts` (`copystat::mark("label")` inside a call adds the
+time since the previous mark to (place, label); marks in `bind`, `tables`,
+`readable`, `execute_indirect`). Marks cost ~0.3 us each, which inflates
+the parts. Unmarked: `execute_indirect` (list.rs ~1917) 24-30 us × 2.5-5k
+calls = 74-122 ms/frame; `dispatch` ~9 us × 3-4k = 30-37 ms; `dispatch_mesh`
+~35 us × ~360 = 12-14 ms. ~80% of it is `State::tables` (descriptor
+tables): an indirect call makes ~18 views readable (86k/frame from indirect
+alone) and most tables are new per draw (~6k new fresh tables/frame), so
+the per-list `ready_once` fast path rarely applies. Per view ~1 us spread
+over: descriptor lookup (`descriptor::view`, `record_at`/`make_listed`),
+`readable` buffer part (deferred refresh + gpu_writes bookkeeping),
+`readable` texture part (upload_from, twin_use, ensure_state). No single
+hotspot at this granularity → needs a sampling profile (perf) to go
+further.
+
 Negative results (keep, do not retry blindly):
 - Copy-mapping the page pool instead of Wine views: impossible, 96% of mapped pages are aliases (shown elsewhere already; the title maps pages into a pool view and the GPU's `CopyPageMappings` aliases them into tiled heaps).
 - `VICTORY_INPLACE=1` alone: 356 MB in place, no fps change (most memory is page pool = view memory, which `inplace` refuses).
