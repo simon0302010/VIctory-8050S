@@ -94,7 +94,10 @@ What was found on the way, measured:
   guards change page protections, every change invalidates the card's import
   of those pages (the kernel's userptr notifier), and the driver faults the
   range in again before the next submission. In place pays only for memory
-  nothing guards. `VICTORY_PORT_ALL=1` alone: no change (95-108 ms).
+  nothing guards. `VICTORY_PORT_ALL=1` alone: no change (95-108 ms). The
+  3,669 buffers in place each had a heap (a kernel userptr object) of their
+  own; sharing heaps (`VICTORY_INPLACE_GROUP=1`) made it worse (341-396 ms),
+  so their number is not the cause.
 
 ## What this fork adds
 
