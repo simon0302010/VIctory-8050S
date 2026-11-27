@@ -2200,9 +2200,11 @@ cbuffer Span : register(b0) {
 };
 ByteAddressBuffer now : register(t0);
 // 16 bytes per piece of the copy: the hash of its bytes when they were
-// last sent up (or hashed whole, the first time).
-RWByteAddressBuffer hashes : register(u0);
-RWByteAddressBuffer differs : register(u1);
+// last sent up (or hashed whole, the first time). Words of structured
+// buffers, not byte-address ones: Wine's compiler has no Load on
+// RWByteAddressBuffer (the same bytes).
+RWStructuredBuffer<uint> hashes : register(u0);
+RWStructuredBuffer<uint> differs : register(u1);
 groupshared uint4 parts[64];
 [RootSignature(RS)]
 [numthreads(64, 1, 1)]
@@ -2260,12 +2262,21 @@ void main(uint3 id : SV_GroupID, uint thread : SV_GroupIndex) {
     if (compare != 0u) {
         // The flag, and above it 31 bits of the hash (`torn`).
         uint folded = h.x ^ (h.y * 3u) ^ (h.z * 5u) ^ (h.w * 7u);
-        differs.Store(out_at + id.x * 4u, (folded << 1u) | (any(h != hashes.Load4(piece * 16u)) ? 1u : 0u));
+        uint4 was = uint4(hashes[piece * 4u], hashes[piece * 4u + 1u], hashes[piece * 4u + 2u], hashes[piece * 4u + 3u]);
+        differs[out_at / 4u + id.x] = (folded << 1u) | (any(h != was) ? 1u : 0u);
         // With the copy-back on its own thread: the next compare of the
         // piece finds what is written from here on.
-        if (compare == 2u) hashes.Store4(piece * 16u, h);
+        if (compare == 2u) {
+            hashes[piece * 4u] = h.x;
+            hashes[piece * 4u + 1u] = h.y;
+            hashes[piece * 4u + 2u] = h.z;
+            hashes[piece * 4u + 3u] = h.w;
+        }
     } else {
-        hashes.Store4(piece * 16u, h);
+        hashes[piece * 4u] = h.x;
+        hashes[piece * 4u + 1u] = h.y;
+        hashes[piece * 4u + 2u] = h.z;
+        hashes[piece * 4u + 3u] = h.w;
     }
 }
 "#;
@@ -4383,43 +4394,28 @@ impl Host {
     }
 
     fn make_card_work(&self) -> windows::core::Result<CardWork> {
-        use windows::Win32::Graphics::Direct3D::Fxc::D3DCompile;
-        use windows::Win32::Graphics::Direct3D::ID3DBlob;
-        let mut code: Option<ID3DBlob> = None;
-        // SAFETY: the source and names live through the call; the out
-        // pointer is ours.
-        unsafe {
-            D3DCompile(
-                CARD_COMPARE.as_ptr().cast(),
-                CARD_COMPARE.len(),
-                windows::core::s!("card compare"),
-                None,
-                None,
-                windows::core::s!("main"),
-                windows::core::s!("cs_5_1"),
-                0,
-                0,
-                &mut code,
-                None,
-            )?;
-        }
-        let code = code.ok_or_else(windows::core::Error::empty)?;
+        // Compiled with its errors logged; the root signature made here (under
+        // Wine the compiler embeds none, and the compare was never made there).
+        let code = compile(CARD_COMPARE, windows::core::s!("main"), windows::core::s!("cs_5_1"))?;
         let list = || self.make_prelude().ok_or_else(windows::core::Error::empty);
         // A megabyte of results: 262,144 pieces, 16 GB of declared ranges
         // in one submission.
         const RESULTS: u64 = 1 << 20;
         let (differs, data) = self.shared_buffer(RESULTS).ok_or_else(windows::core::Error::empty)?;
         name(&differs, || "card compare results".into());
-        // SAFETY: the blob's own bytes; the root signature is inside the
-        // shader.
+        use crate::rootsig::Param;
+        let root = crate::rootsig::make(
+            &self.device,
+            &[Param::Constants { register: 0, count: 6 }, Param::Srv(0), Param::Uav(0), Param::Uav(1)],
+            "card compare",
+        )?;
+        // SAFETY: the code's own bytes and our root signature.
         unsafe {
-            let bytes = std::slice::from_raw_parts(code.GetBufferPointer().cast::<u8>(), code.GetBufferSize());
-            let root: ID3D12RootSignature = self.device.CreateRootSignature(0, bytes)?;
             let pso: ID3D12PipelineState = self.device.CreateComputePipelineState(&D3D12_COMPUTE_PIPELINE_STATE_DESC {
                 pRootSignature: std::mem::transmute_copy(&root),
                 CS: D3D12_SHADER_BYTECODE {
-                    pShaderBytecode: bytes.as_ptr().cast(),
-                    BytecodeLength: bytes.len(),
+                    pShaderBytecode: code.as_ptr().cast(),
+                    BytecodeLength: code.len(),
                 },
                 ..Default::default()
             })?;
