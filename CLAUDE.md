@@ -1,0 +1,166 @@
+# CLAUDE.md: VIctory-8050S working notes
+
+Read this first. It is the hand-over between sessions: what this fork is, how
+to build, run and measure it, everything found so far (with numbers), the
+traps, and the plan. Keep it current: when something is found, measured or
+decided, update the relevant section here **and** the README, then commit.
+
+## 1. What this is
+
+- A fork of VIctory (Marvisak/VIctory → Belobug/VIctory-Belobug-AMD), a
+  compatibility layer that runs an Xbox Series title (GTA VI,
+  `game_scarlett_master.exe`) on PC. Rust workspace, Windows target; we build
+  it for `x86_64-pc-windows-gnu` and run it under GE-Proton on Linux.
+- **This fork targets exactly one machine:** Framework Desktop, Ryzen AI Max
+  385, Radeon 8050S (RDNA 3.5, 32 CU, unified memory), 32 GB RAM (512 MB BIOS
+  carve-out; amdgpu GTT 15.7 GB; RADV reports vram_mb=10797), Arch Linux,
+  kernel 7.3, Mesa 26.3 (RADV), GE-Proton 11-14 (wine-11.0 staging,
+  vkd3d-proton cae8353e). Linux + Proton only; Windows does not matter here.
+- **The idea:** the console has one memory shared by CPU and GPU; upstream
+  VIctory, made for discrete GPUs, keeps copies of title memory on the card and
+  watches/copies/compares every frame. The 8050S has unified memory too, so
+  that work should mostly not be needed. Plus: fix what Wine/Proton make slow,
+  in Wine itself where that is where the cost is. Measure everything.
+- **Goal:** a playable, stable 30 fps (33 ms/frame), Series S profile, then
+  the picture (textures, lighting, ray tracing).
+- The user (GitHub `simon0302010`) owns the fork. Pronouns unknown: use
+  they/them. They write in English; the system locale is German (tool output
+  is German).
+
+## 2. Repositories, paths, remotes
+
+| What | Where |
+|---|---|
+| This repo (local checkout) | `/home/simon/Dokumente/Rust/victory/VIctory-Belobug-AMD`, branch `import-coolfox` |
+| Published fork | `https://github.com/simon0302010/VIctory-8050S`, branch `main`. Remote name **`personal`**. Push with `git push personal HEAD:main`. |
+| `origin` remote | Belobug/VIctory-Belobug-AMD: **deleted upstream**, do not fetch/push. |
+| victory-sandbox (user's own tool, now a git repo) | `/home/simon/Dokumente/Rust/victory-sandbox` (`src/main.rs`); install with `cargo install --path .` → `~/.cargo/bin/victory-sandbox` |
+| Sandbox settings | `~/.config/victory-sandbox/settings` (repo, game, proton, build_args) |
+| Runtime, saves, caches, logs | `~/.local/share/victory-sandbox/runtime` (`logs/run-<epoch>.log`, `logs/latest.txt`, `cache/`, `state/`); inside the sandbox it is `Z:\victory\` / `/victory` |
+| Game | `/run/media/simon/Daten/GTA VI/game_scarlett_master.exe` (read-only in sandbox) |
+| Original GE-Proton (do not modify) | `~/.local/share/Steam/compatibilitytools.d/GE-Proton11-14-x86_64` |
+| Our Proton copy (patched wineserver; hard-linked copy) | `~/.local/share/Steam/compatibilitytools.d/GE-Proton11-14-x86_64-victory` (Steam name `GE-Proton11-14-x86_64-victory`) |
+| Upstream sources for reference/building | `/home/simon/Dokumente/Rust/victory/upstream-src/` : `vkd3d-proton` (at cae8353e), `proton-wine` (ValveSoftware proton_11.0, sparse), `ge-proton` (GE-Proton11-14 tag with `wine`, `wine-staging`, `wineopenxr` submodules; `build-server/` holds our wineserver build) |
+| cool_fox (source of the 5 cherry-picked commits) | `https://github.com/DoubleGhosty/cool_fox` |
+
+Current sandbox settings: `repo` = this checkout, `proton` = the `-victory`
+copy, `build_args = -p victory --features diagnostics` (needed for
+`VICTORY_KEYS`, debug panel extras, copystat lines).
+
+## 3. Build, run, measure
+
+```sh
+victory-sandbox build                 # builds working tree (uncommitted changes included) + userptr shim, installs into runtime
+victory-sandbox run                   # plays; log in runtime/logs/run-<epoch>.log
+VICTORY_PANEL=1 victory-sandbox run   # debug overlay (F3 toggles)
+linux/bench-scene.sh <label> [lines]  # unattended intro 3D scene, prints mean/median ms/frame
+VICTORY_X=1 linux/bench-scene.sh ...  # extra switches come from the environment (VICTORY_*, VKD3D_*, RADV_*, MESA_* pass into the sandbox)
+```
+
+- Type-check: `cargo check --target x86_64-pc-windows-gnu -p victory-gpu [--features diagnostics] [--tests]` (fast; it really checks).
+- Tests needing Windows APIs: build `cargo test --release --target x86_64-pc-windows-gnu -p <crate> --lib --no-run`, copy the `.exe` from `target/x86_64-pc-windows-gnu/release/deps/` into `~/.local/share/victory-sandbox/runtime/`, run `cd ~; victory-sandbox exec proton run 'Z:\victory\<name>.exe' <filter> --ignored --nocapture --test-threads 1`.
+  - `xmem` test `view_scaling` (victory-hle): Wine view map cost vs view count.
+  - `panel` test `a_box_is_painted` with `VICTORY_PANEL_PPM='Z:\victory\logs\panel.ppm'` dumps the HUD; convert to PNG with a small python zlib script and view it.
+- `bench-scene.sh` presses Enter every 5 s (`VICTORY_KEYS`), waits for N
+  frame lines with ≥100 draws, kills the game, summarizes. The 3D scene
+  starts ~35 s in. Runs vary a lot (streaming): **always do ≥2-3 runs** and
+  compare medians; the mean is wrecked by load stalls.
+- Frame-rate line every ~5 s: `INFO victory_gpu::host: X fps, Y ms/frame (P preparing: copies…, textures…; G on the GPU; B copying back…)`. Useful companions (diagnostics build): `the card's clock per frame` (idle split: while our submitting thread worked vs the title had not submitted; our waits for the card), `preparing per frame, the submitting thread`, `copystat: copies per frame` (watches, MB checked/unchanged, guard faults), `copystat: recording per frame` (snapshots, MB compared back), `asking about title memory per frame`, `texture refreshes per frame`, `the relay per frame`, `host copies in the card's memory`, `renderer port 1 (...)`, `title memory in place:`, `dropped N/frame without a host pipeline: <reason>`. Strip ANSI first: `sed 's/\x1b\[[0-9;]*m//g'`.
+- `VICTORY_DSTORAGE_LOG='Z:\victory\logs\dstorage.log'`: streaming log; its `M` lines (1/s) = xmem map costs: cols after time: calls, pages, ms, longest, lock-wait, alias calls, alias ms, unmap n, ms, split n, ms, map n, ms, commit n, ms, **pages mapped, of them aliased** (our addition).
+- `VICTORY_INPLACE_PROBE=1`: probe at start (+ census at 30/150 s): whether title memory can be the card's memory (private / sections), costs.
+- Pipeline warm-up: run once with `VICTORY_PIPELINE_BOOK=1`, then `VICTORY_DATA_DIR='Z:\victory\state' VICTORY_CACHE_DIR='Z:\victory\cache' victory-sandbox exec proton run 'Z:\victory\victory.exe' warm` (~9 min for 83,556; `--used` does not work: it needs the pipeline library, which vkd3d-proton lacks). Done already for the current translator.
+- Kernel log: `journalctl -k --since "30 min ago" | grep -i amdgpu`.
+- `perf` is installed but cannot attach to wineserver/game (other user namespace, `perf_event_paranoid=2`). System-wide tracing needs the user to run `sudo sysctl kernel.perf_event_paranoid=-1`; ask first.
+- CPU per thread without perf: sample `/proc/<pid>/task/*/stat` utime+stime twice.
+
+## 4. Traps (learned the hard way)
+
+- **Never `pkill -f 'victory.exe run'`**: it matches the calling shell's own command line and kills the tool call (exit 144). Use `pkill -f '[v]ictory.exe run'`.
+- Foreground `sleep` in tool calls is blocked; inside scripts it is fine.
+- Long jobs (builds, warm-up): run in background and wait for the notification; do not poll.
+- Running downloaded scripts (e.g. GE's prep script) was refused once by the auto-mode classifier; the user then explicitly allowed patching/building wineserver. Ask before running other third-party build scripts.
+- `victory-sandbox` passes only `VICTORY_*, PROTON_*, VKD3D_*, DXVK_*, RADV_*, MESA_*, AMD_*, WINEDEBUG` into the sandbox (plus LD_PRELOAD for the shim).
+- Wine's HLSL compiler (vkd3d-shader via D3DCompile): **embeds no root signature** (so `CreateRootSignature` from a blob fails E_FAIL → make it with `crate::rootsig::make`) and **has no `Load` on `RWByteAddressBuffer`** (E5005 → use `RWStructuredBuffer<uint>` word-indexed, same bytes). Compile our shaders with `crate::host::compile` (logs errors). Any of our own shaders still using the old pattern silently fails under Wine: grep `CreateRootSignature(0` and `RWByteAddressBuffer`.
+- vkd3d-proton's `OpenExistingHeapFromFileMapping` maps a view, imports it, and **unmaps it at once**: with the shim the import follows the view → never use it; open sections through a whole view we keep (`OpenExistingHeapFromAddress1`).
+- vkd3d-proton host import failure **falls back silently** to its own allocation and reports success ("Failed to import host memory" only with `VKD3D_DEBUG=warn`).
+- `xmem::on_wine()` (hle) and `victory_gpu::wine::on()` (gpu; re-exported as `victory_hle::wine`) detect Wine.
+- Edition 2024: `std::env::set_var` is unsafe; done once at the top of `main` (Linux defaults).
+- The README had external edits between my reads twice; re-read before editing.
+- Commit frequently (user's request), small commits, push to `personal HEAD:main`. Commit trailer:
+  ```
+  Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+  Claude-Session: https://claude.ai/code/session_01Ck4nRpWH6VV2Mnex5soPyy
+  ```
+  (use the session line the current system reminder gives, if different).
+
+## 5. What has been done (commits on `main`, newest last)
+
+1. Forked as standalone public repo (no "forked from"); `a-publier` pushed as `main`.
+2. Cherry-picked the user's 5 cool_fox commits (`1ce5e6e`…`7426b19`): indirect clamps with Wine's compiler, one back edge per loop header, 256 MiB pipeline worker stack, compose/ambient/depth-plane/keep-awake root signatures in code (`rootsig.rs`).
+3. `0a3c1d5` Series S by default (`--console series-x` for the other).
+4. In-place probe fixes (`491672e`, `94ca540`, `c65aee0`).
+5. `e0593f3` **userptr shim** (`linux/userptr-shim/userptr_shim.c`): LD_PRELOAD wrapper of `drmCommandWriteRead` that drops `AMDGPU_GEM_USERPTR_ANONONLY` (libdrm passes flags 0xe) for `DRM_AMDGPU_GEM_USERPTR` (0x11). Real function looked up via `dlopen("libdrm.so.2", RTLD_NOLOAD)` (RTLD_NEXT fails: the loader opens RADV RTLD_LOCAL; that bug made all GPU allocations fail once). victory-sandbox builds it into `runtime/linux/libvictory_userptr.so` and sets `LD_PRELOAD` (`VICTORY_USERPTR_SHIM=0` disables; `VICTORY_USERPTR_SHIM_LOG=1` logs). Result: page pool sections readable/writable by the card in place (probe VERDICT all true).
+6. `b54093f` **wineserver patch** `linux/wine/0001-server-index-process-views-by-address.patch` (process views also in an rb-tree by base; `find_mapped_view`, `find_mapped_addr`, `is_valid_view_addr` use it) + `linux/wine/build-wineserver.sh` (clones GE tag, applies GE's Wine patch section 2 of `protonprep-valve-staging.sh`, our patches, `make_vulkan`, `make_specfiles`, configure without most deps, `make server/wineserver`, installs into `<proton>-victory` via `cp -al`, renames it in `compatibilitytool.vdf`). Built and in use. Also `xmem` `view_scaling` bench, alias counters, `linux/bench-scene.sh`.
+7. `86e3e3f` **debug panel Linux rows** (`crates/victory-gpu/src/host/panel.rs`, canvas 540×434): IDLE (TITLE/OURS/BACK), PREP (CPY/TEX/REMAP), MAPS (/s and ms each; counters `victory_gpu::wine::TITLE_MAPS`, fed always by `xmem::counted`), TRACK (write-watch ms, guard faults, pipeline wait), LINUX (MB in place, WINE, SHIM). Orange when bad.
+8. `75f184b`, `e2cdf4c` **Linux defaults** (`apps/victory/src/main.rs` `LINUX_DEFAULTS`, set before anything reads env, only under Wine, `VICTORY_LINUX_DEFAULTS=0` disables): `VICTORY_CARD_BUFFERS_MIN_MB=1`, `VICTORY_PORT_CONSTANTS/DESCRIPTORS/CBV/GUARD/JOURNAL=1`, `VICTORY_MAP_THREADS=1`, `VICTORY_TEXTURE_NO_WAIT=1`.
+9. `564f728` `VICTORY_PORT_ALL=1` (port 1 for any stretch of a section, not only <4 GiB). Off.
+10. `59865fa` `VICTORY_INPLACE_GROUP=1` (in-place buffers share 64 MiB-chunk heaps). Off (did not help).
+11. `09db1f1` **card compare works under Wine** (`CARD_COMPARE` in `host.rs`: root signature via `rootsig` incl. new `Param::Srv`, structured buffers). Enables host copies in the card's memory.
+12. README rewritten around the fork (idea, setup, measurement table, findings). CLAUDE.md (this file).
+
+victory-sandbox repo: `e1626b1` original, `e26e367` builds/preloads the shim.
+
+## 6. Measurements (intro 3D scene, bench-scene.sh, Series S, RT off)
+
+| State | Median ms/frame |
+|---|---|
+| Start (upstream switches, debug log) | ~1,100 (GPU busy ~7%) |
+| Ports 1,2,5,6,7 (+shim) | 943 |
+| + MAP_THREADS=1, TEXTURE_NO_WAIT=1 | 289-435 |
+| + patched wineserver | 94-103 (those two switches then irrelevant: 99-103 either way) |
+| + card compare + CARD_BUFFERS_MIN_MB=1 | **76-122** (3 runs); 55-80 steady after streaming, up to 18 fps |
+
+Micro: Wine view map with 1k/65k views: 25/210 µs before, 15/8.4 µs after patch; unmap+map at 65k: 506 → 9.9 µs. In game before: ~2,240 maps/s, ~1,100 unmaps/s at ~2.3/1.5 ms each; wineserver at 92% of a core.
+
+Current breakdown of a ~55 ms frame: card busy ~63% (~35 ms, title rendering + our uploads/compare passes); card idle ~21 ms = ~16 ms our submitting thread preparing (refreshes ~14 ms) + ~5 ms title not submitting; submitting thread waits ~17 ms/frame for the card; relay (copy-back) ~20 ms on its own thread; ~2,550 dispatches/frame dropped (ray-tracing structure builder off). Most runs: one 3-6 s stall right after the world loads ("on the GPU" and "copying back" both ~5.7 s); no amdgpu fault in dmesg.
+
+Negative results (keep, do not retry blindly):
+- Copy-mapping the page pool instead of Wine views: impossible, 96% of mapped pages are aliases (shown elsewhere already; the title maps pages into a pool view and the GPU's `CopyPageMappings` aliases them into tiled heaps).
+- `VICTORY_INPLACE=1` alone: 356 MB in place, no fps change (most memory is page pool = view memory, which `inplace` refuses).
+- `VICTORY_INPLACE=2` + `VICTORY_LATE_WAIT=0`: every submission waits for the card (539 ms, pre-wineserver-patch).
+- `VICTORY_INPLACE=2` + `PORT_ALL` with late wait on (patched server): card 98-100% busy, 255-271 ms. Grouped heaps: 341-396 ms. Hypothesis (unconfirmed): under Wine, write-watch resets/guards are `mprotect`, which fires the userptr MMU notifier; amdgpu invalidates the import (and may wait for the GPU), then refaults the range at the next CS. Needs kernel tracing to confirm (amdgpu tracepoints / perf with paranoid -1).
+- `PORT_ALL=1` alone: 95-108 ms (no gain; most refusals are private memory).
+
+## 7. Key code map
+
+- `crates/victory-hle/src/modules/xmem.rs`: title memory; page pool = sections (`CreateFileMappingW`, SEC_COMMIT under Wine) shown through 64 KiB views (`MapViewOfFile3` into placeholders); `change`/`map`/`unmap`/`map_alias`; `counted()` times calls; `ALIASING`, `note_shown`; `arrange` makes <4 GiB reservations one stretch for port 1; tests incl. `view_scaling`, `map_bench`.
+- `crates/victory-gpu/src/shadow.rs`: host copies of title buffers (`Shadow`), in-place form `Shadow::placed`, card buffers (`cards()`, `VICTORY_CARD_BUFFERS_MIN_MB`).
+- `crates/victory-gpu/src/inplace.rs`: probe, census, `place_for` (levels via `VICTORY_INPLACE`), `place_part`, grouping (`VICTORY_INPLACE_GROUP`), `bytes_in_place`.
+- `crates/victory-gpu/src/port.rs`: renderer port 1 (regions = our own view of a section stretch, opened as heap); `all()` = `VICTORY_PORT_ALL`.
+- `crates/victory-gpu/src/watch.rs`: write watching + guards (port 6 there too); `copystat.rs`: per-frame counters (`peek`).
+- `crates/victory-gpu/src/texture.rs`: texture refreshes, `no_wait()`, `REFRESH_WAITS`.
+- `crates/victory-gpu/src/host.rs`: frame line, card clock, preparing, late wait (`late_stage`, relay → stage 3 by default), card compare (`CARD_COMPARE`, `make_card_work`, `card_ready`), `compile()`.
+- `crates/victory-gpu/src/rootsig.rs`: root signatures in code (`Param::{Constants, Uav, Srv, SrvTable, UavTable}`).
+- `crates/victory-gpu/src/wine.rs`: `on()`, `shim()`, `TITLE_MAPS`, `note_map`.
+- `crates/victory-gpu/src/host/panel.rs`: HUD.
+- `apps/victory/src/main.rs`: CLI (`run`, `warm`, `--console`), `LINUX_DEFAULTS`.
+- `apps/victory/src/fsr_4k.rs`, `crates/victory-hle/src/modules/fidelityfx.rs`: PC FSR 4.1.2 bridge (Series X 4K output; `VICTORY_FSR_4K`, needs AMD's signed `amd_fidelityfx_upscaler_dx12.dll`).
+- `crates/victory-gpu/src/pipeline/known.rs` + `apps/victory/src/warm.rs`: pipeline book and warm-up.
+- `crates/victory-hle/src/modules/gameinput.rs`: `VICTORY_KEYS` scripted input (diagnostics).
+
+## 8. Plan (agreed direction: playable 30 fps first, then picture)
+
+Next steps in order; the user asked to start with step 1 when resuming.
+
+1. **Measure the GPU's ~35 ms.** Use the GPU timing mode (`VICTORY_GPU_TIMING`; note it forces late wait off, see `late_stage`) or a capture to split title rendering vs our own passes (uploads of card copies ~45 MB/frame, compare passes, texture uploads, ambient/compose). The 8050S has ~2.5× the Series S's compute at similar bandwidth, so the title's own rendering should fit well under 33 ms; if not, look at translated shader cost. This decides whether resolution scale / FSR is worth anything.
+2. **Overlap CPU and GPU.** Today preparing (~16 ms idle card), submitting and waiting (~17 ms) are serialized. Goal: frame ≈ max(GPU, CPU) ≈ 35-40 ms. Look at the late-wait/relay machinery (`host.rs` `late_stage`, flights, settles, "waits for every earlier shader write", "submissions sent ahead") for what forces the 17 ms of waits.
+3. **Cut CPU copying**: refreshes ~14 ms, relay ~20 ms, the 3.6 GB/frame "watches checked" (mostly unchanged). Structural fix: make in-place work under Wine without the GPU slowdown: confirm the mprotect/userptr-notifier hypothesis (ask the user for `sudo sysctl kernel.perf_event_paranoid=-1`, then `perf record -a -e 'amdgpu:*'` / count `mprotect` + `amdgpu_mn_*`), then keep in-place memory out of write watching/guards entirely (it needs neither), or patch Wine's write-watch to not re-protect such ranges.
+4. **The post-load stall** (task): find what the card and relay wait 5.7 s for (log around it, `VKD3D_DEBUG=warn`, RADV_DEBUG hang detection off by default; check pipelines made at that moment, huge copies: one run showed 1.8 GB of copies in the first world frame).
+5. **Then** resolution/upscaling if the GPU is still the limit: the Series S profile already upscales with the title's own console FidelityFX (`amd_fidelityfx_loader_xbox`, `crates/victory-loader/src/resolution.rs`, `VICTORY_FFX_SCALE`); lowering its internal scale is the cheap knob. The fork's PC FSR 4.1.2 bridge targets Series X 4K output (more GPU work) and FSR 4 needs RDNA 4 (8050S is RDNA 3.5: likely FSR 3.1 fallback). FSR 3 frame generation only as a last touch (latency).
+6. **Picture:** ray tracing off drops ~2,550 dispatches/frame (lighting), textures waited up to 33 s for memory in early runs (should be better now), `a pipeline creation method that is not implemented` warnings (~10 kinds), `placed unordered texture view not mirrored` (writes lost), `indirect kind 2: prepare failed` (10/frame), 2 compute pipelines refused, 6 pipelines crash the driver compiler (`warm-bad.txt`). Try `victory-sandbox run --rt` once frame time allows.
+
+Other notes:
+- RAM is tight: 31 GB, the game + copies used ~20 GB and swapped 6 GB in the first runs. Fewer copies (in place) also fixes this.
+- `VICTORY_PORT_CBV` etc. read env in other crates (victory-shader); that is why defaults are set as env vars in `main`.
+- Upstream README sections below the fork's part describe Windows results; keep them, mark ours clearly.
+- When a measured change helps: make it a Linux default (with a comment saying the measurement), add a row to the README table, commit, push.
