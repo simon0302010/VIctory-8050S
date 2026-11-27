@@ -43,10 +43,16 @@ for p in "$here"/*.patch; do
     echo "applying $(basename "$p")"
     patch -Np1 < "$p"
 done
+# Generated headers configure needs (as GE's Makefile does after the source
+# step; vk.xml and video.xml are in the tree, nothing is downloaded).
+XDG_CACHE_HOME="$work/build-cache" dlls/winevulkan/make_vulkan -x vk.xml -X video.xml > ../make_vulkan.log 2>&1 \
+    || { tail -20 ../make_vulkan.log; exit 1; }
+tools/make_specfiles > ../make_specfiles.log 2>&1 || { tail -20 ../make_specfiles.log; exit 1; }
 
 # 4. Only the server (64-bit host build, no PE side).
 mkdir -p ../build-server
 cd ../build-server
+rm -rf ./*
 if [ ! -f Makefile ]; then
     ../wine/configure --enable-win64 --disable-tests --without-x --without-wayland \
         --without-freetype --without-gstreamer --without-vulkan --without-mingw > configure.log 2>&1 \
@@ -59,7 +65,9 @@ make -j"$(nproc)" server/wineserver > make.log 2>&1 || { tail -30 make.log; exit
 copy="${proton}-victory"
 if [ ! -d "$copy" ]; then
     cp -al "$proton" "$copy"
-    sed -i "s/\"${tag}\"/\"${tag}-victory\"/" "$copy/compatibilitytool.vdf" 2>/dev/null || true
+    # Its own name in Steam (sed writes a new file: the link to the original goes).
+    name=$(basename "$proton")
+    sed -i "s/\"${name}\"/\"${name}-victory\"/; s/\"display_name\" *\"\([^\"]*\)\"/\"display_name\" \"\1 (VIctory)\"/" "$copy/compatibilitytool.vdf"
 fi
 rm -f "$copy/files/bin/wineserver"
 cp server/wineserver "$copy/files/bin/wineserver"
