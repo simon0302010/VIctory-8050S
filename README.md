@@ -62,7 +62,8 @@ more (several runs each: the scene streams, runs differ):
 | Upstream switches, debug logging | about 1,100 | 0.3-1 fps; the card busy about 7% of the time |
 | Renderer patches 1, 2, 5, 6, 7 on (needs the userptr shim) | 943 | |
 | + one mapping thread, texture refreshes that do not wait for remaps | 289-435 | this fork's defaults under Wine |
-| + **patched wineserver** | **94-103** | about 10 fps |
+| + **patched wineserver** | 94-103 | about 10 fps |
+| + card compare fixed for Wine, `VICTORY_CARD_BUFFERS_MIN_MB=1` | **76-122** (3 runs) | 8-13 fps; one 6 s stall right after the world loads in one run |
 
 Where a frame goes now (debug panel, frame lines): the title's own threads
 and our submitting thread take turns; the card is busy about 20% of a frame.
@@ -105,7 +106,8 @@ What was found on the way, measured:
 |---|---|
 | `linux/wine` | The wineserver patch (views indexed by address) and `build-wineserver.sh`, which builds GE-Proton's own server with it (GE's exact Wine tree and patches, so the server protocol matches) into a copy of that GE-Proton. |
 | `linux/userptr-shim` | Preloaded into the game by victory-sandbox: drops `AMDGPU_GEM_USERPTR_ANONONLY` from RADV's host imports, so Wine's sections can be the card's memory. `VICTORY_USERPTR_SHIM=0` leaves it out. |
-| Linux defaults | Under Wine, switches you did not set: renderer patches 1, 2, 5, 6, 7, `VICTORY_MAP_THREADS=1`, `VICTORY_TEXTURE_NO_WAIT=1` (the last two only matter without the patched server). `VICTORY_LINUX_DEFAULTS=0`: as upstream. |
+| Linux defaults | Under Wine, switches you did not set: renderer patches 1, 2, 5, 6, 7, `VICTORY_CARD_BUFFERS_MIN_MB=1`, `VICTORY_MAP_THREADS=1`, `VICTORY_TEXTURE_NO_WAIT=1` (the last two only matter without the patched server). `VICTORY_LINUX_DEFAULTS=0`: as upstream. |
+| Shaders of ours under Wine | Wine's HLSL compiler embeds no root signature and has no `Load` on `RWByteAddressBuffer`; the card compare (host copies in the card's memory) and the in-place probe were never made there. Both now make their root signatures in code and use structured buffers. |
 | Debug panel | `VICTORY_PANEL=1` (or F3): FPS, frame graph, GPU, VRAM, CPU, RAM, and Linux rows: the card idle because the title had not submitted (`TITLE`) or because we worked (`OURS`), copying back; preparing's copies, texture refreshes and their waits for remaps; the title's page maps and unmaps a second and ms each; write-watch ms, guard faults, pipeline waits a frame; MB in place, Wine, and whether the shim is loaded. Rows turn orange where a frame is lost. |
 | `linux/bench-scene.sh` | The intro's 3D scene unattended (diagnostics build: Enter pressed by `VICTORY_KEYS`), summarised; extra switches from the environment. |
 | `VICTORY_PORT_ALL=1` | Renderer patch 1 for any stretch of the page pool, not only the 32-bit heap (off). |

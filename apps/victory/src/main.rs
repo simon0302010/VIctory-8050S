@@ -189,7 +189,12 @@ enum Console {
 /// the median frame (linux/bench-scene.sh). `VICTORY_LINUX_DEFAULTS=0` leaves
 /// everything as upstream has it.
 #[cfg(windows)]
-const LINUX_DEFAULTS: [(&str, &str); 7] = [
+const LINUX_DEFAULTS: [(&str, &str); 8] = [
+    // Title buffers of 1 MiB or more get copies in the card's memory, whose
+    // changes the card itself finds (the compare, which Wine could not make
+    // before): snapshots and CPU compares of what shaders wrote, 24 ms and
+    // 531 MB a frame, go to 1.9 ms and 34 MB.
+    ("VICTORY_CARD_BUFFERS_MIN_MB", "1"),
     ("VICTORY_PORT_CONSTANTS", "1"),
     ("VICTORY_PORT_DESCRIPTORS", "1"),
     ("VICTORY_PORT_CBV", "1"),
