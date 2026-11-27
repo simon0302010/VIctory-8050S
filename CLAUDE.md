@@ -227,14 +227,49 @@ Negative results (keep, do not retry blindly):
 - `crates/victory-gpu/src/pipeline/known.rs` + `apps/victory/src/warm.rs`: pipeline book and warm-up.
 - `crates/victory-hle/src/modules/gameinput.rs`: `VICTORY_KEYS` scripted input (diagnostics).
 
+## 7b. State at the end of the 2026-11-27 session
+
+Steady (streamed-in) frame ~65-70 ms (~15 fps), no post-load stall. The card
+is not the limit (own work 25-33 ms) and no thread is saturated. The
+critical path is now **the submitting thread**, busy ~48 ms a frame in
+submissions (diag line `thread N submitted`): refreshes ~25 ms (flushed on the
+`victory-wide-*` pool; write watch = Wine `NtGetWriteWatch` → `PAGEMAP_SCAN`
+under the process-wide `virtual_mutex`, 1,255 asks/frame over 8.3 GB of which
+8.2 GB unchanged, 103 ms CPU over all threads), snapshots ~9 ms, copies in the
+card's memory ~6 ms, planning card steps ~3.5 ms, copies/fills ~5 ms. The
+card idles ~29 ms a frame behind it. Recording threads ~30 ms/frame each.
+
+Tried this session, kept: GPU timing stamps (`271685b`), list-call places
+and marks (`VICTORY_MARKS=1`), fast_local (`11e135d`), port 1 off
+(`300718f`), `VICTORY_CARD_STEPS=1` (`fb52a1b`), AVX2 `memcmp`
+(`apps/victory/src/fastmem.rs`; Wine's ucrtbase memcmp is 8 B/step; no
+measurable fps change, 69/77). Not kept: `VICTORY_FILL_TITLE=1/2` (card
+steps does it correctly), `VICTORY_CARD_STEPS=2` (65-66 vs 67-70: maybe 2-3
+ms, within noise; its doc names a stale-read risk), port 1 on.
+
+Next ideas, by expected gain:
+1. Make the submitting thread's refresh cheaper: fewer/smaller write-watch
+   asks (most of 8.3 GB/frame is unchanged; ranges asked per copy span), or
+   take `NtGetWriteWatch` out of `virtual_mutex` contention in Wine (we
+   already build wineserver; ntdll.so would be the same recipe), or move
+   the asking off the critical path (`VICTORY_ASK_EARLY`, `VICTORY_ASK_SPREAD`
+   exist: measure).
+2. Snapshots (9 ms) and card copies (6 ms) on the submitting thread: can they
+   go to the pool / relay?
+3. CPU elsewhere: audio decoding (XMA/Opus) ~9% of our CPU, zlib/bcpack
+   streaming ~6%, SipHash maps ~2.5% (`RandomState` on hot `HashMap<usize,_>`),
+   QPC/rdtscp from diagnostics timing ~1.3% of all samples.
+4. Port 1 / in place done right: driver-allocated memory mapped into the
+   title instead of userptr imports (any userptr costs a page walk per CS).
+
 ## 8. Plan (agreed direction: playable 30 fps first, then picture)
 
 Next steps in order; the user asked to start with step 1 when resuming.
 
 1. ~~**Measure the GPU's ~35 ms.**~~ Done, see the step 1 result in section 6: 25-33 ms, title 21-29. Use the GPU timing mode (`VICTORY_GPU_TIMING`; note it forces late wait off, see `late_stage`) or a capture to split title rendering vs our own passes (uploads of card copies ~45 MB/frame, compare passes, texture uploads, ambient/compose). The 8050S has ~2.5× the Series S's compute at similar bandwidth, so the title's own rendering should fit well under 33 ms; if not, look at translated shader cost. This decides whether resolution scale / FSR is worth anything.
 2. ~~**Overlap CPU and GPU.**~~ Measured, see step 2 result: the waits are removable but the CPU is saturated; recording is the critical path. Today preparing (~16 ms idle card), submitting and waiting (~17 ms) are serialized. Goal: frame ≈ max(GPU, CPU) ≈ 35-40 ms. Look at the late-wait/relay machinery (`host.rs` `late_stage`, flights, settles, "waits for every earlier shader write", "submissions sent ahead") for what forces the 17 ms of waits.
-3. **Cut CPU copying**: refreshes ~14 ms, relay ~20 ms, the 3.6 GB/frame "watches checked" (mostly unchanged). Structural fix: make in-place work under Wine without the GPU slowdown: confirm the mprotect/userptr-notifier hypothesis (ask the user for `sudo sysctl kernel.perf_event_paranoid=-1`, then `perf record -a -e 'amdgpu:*'` / count `mprotect` + `amdgpu_mn_*`), then keep in-place memory out of write watching/guards entirely (it needs neither), or patch Wine's write-watch to not re-protect such ranges.
-4. **The post-load stall** (task): find what the card and relay wait 5.7 s for (log around it, `VKD3D_DEBUG=warn`, RADV_DEBUG hang detection off by default; check pipelines made at that moment, huge copies: one run showed 1.8 GB of copies in the first world frame).
+3. **Cut CPU copying** (in progress, see 7b): refreshes ~14 ms, relay ~20 ms, the 3.6 GB/frame "watches checked" (mostly unchanged). Structural fix: make in-place work under Wine without the GPU slowdown: confirm the mprotect/userptr-notifier hypothesis (ask the user for `sudo sysctl kernel.perf_event_paranoid=-1`, then `perf record -a -e 'amdgpu:*'` / count `mprotect` + `amdgpu_mn_*`), then keep in-place memory out of write watching/guards entirely (it needs neither), or patch Wine's write-watch to not re-protect such ranges.
+4. ~~**The post-load stall**~~ Done: renderer port 1's userptr (see step 4 result). find what the card and relay wait 5.7 s for (log around it, `VKD3D_DEBUG=warn`, RADV_DEBUG hang detection off by default; check pipelines made at that moment, huge copies: one run showed 1.8 GB of copies in the first world frame).
 5. **Then** resolution/upscaling if the GPU is still the limit: the Series S profile already upscales with the title's own console FidelityFX (`amd_fidelityfx_loader_xbox`, `crates/victory-loader/src/resolution.rs`, `VICTORY_FFX_SCALE`); lowering its internal scale is the cheap knob. The fork's PC FSR 4.1.2 bridge targets Series X 4K output (more GPU work) and FSR 4 needs RDNA 4 (8050S is RDNA 3.5: likely FSR 3.1 fallback). FSR 3 frame generation only as a last touch (latency).
 6. **Picture:** ray tracing off drops ~2,550 dispatches/frame (lighting), textures waited up to 33 s for memory in early runs (should be better now), `a pipeline creation method that is not implemented` warnings (~10 kinds), `placed unordered texture view not mirrored` (writes lost), `indirect kind 2: prepare failed` (10/frame), 2 compute pipelines refused, 6 pipelines crash the driver compiler (`warm-bad.txt`). Try `victory-sandbox run --rt` once frame time allows.
 

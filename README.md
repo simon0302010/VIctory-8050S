@@ -103,6 +103,9 @@ What was found on the way, measured:
   13.7% of the CPU time in our code, the five recording threads fighting over
   one cache line. `crates/victory-gpu/src/fast_local.rs` reads the TEB slot
   directly.
+- **Wine's `memcmp`** (ucrtbase) compares eight bytes a step, and Rust's
+  slice compares on windows-gnu call it; `apps/victory/src/fastmem.rs`
+  defines an AVX2 one for the executable (0.16 of a core in the profile).
 - **The card is not the limit**: its own work is 25-33 ms a frame (title
   21-29 ms), see below. No thread is saturated any more either (perf: the
   recording threads ~31% of a core each, the title's main thread 63%): the
