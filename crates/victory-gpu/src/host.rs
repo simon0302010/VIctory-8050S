@@ -6025,6 +6025,14 @@ impl Host {
         for (_i, &(group, _kind)) in groups.iter().enumerate() {
             *submitted += 1;
             let started = std::time::Instant::now();
+            // A timing run: the group between two stamps, for its time on
+            // the card alone.
+            #[cfg(feature = "diagnostics")]
+            let bracketed: Option<Vec<Option<ID3D12CommandList>>> = timing().then(stamps::bracket).flatten().map(|[a, b]| {
+                std::iter::once(Some(a)).chain(group.iter().cloned()).chain([Some(b)]).collect()
+            });
+            #[cfg(feature = "diagnostics")]
+            let group = bracketed.as_deref().unwrap_or(group);
             // SAFETY: closed lists; the fence and event are ours.
             unsafe {
                 self.queue.ExecuteCommandLists(group);
@@ -6064,7 +6072,8 @@ impl Host {
                         noted += ms;
                     }
                 }
-                crate::copystat::list_took(_kind, wall, (noted * 1e3) as u64);
+                let card = if bracketed.is_some() { stamps::bracket_us() } else { None };
+                crate::copystat::list_took(_kind, wall, (noted * 1e3) as u64, card);
             }
             // A submission of one list was never named here (`groups.len()
             // > 1` was the test): the two 50 ms lists of the gameplay

@@ -245,18 +245,24 @@ impl Timed {
 
 /// With `VICTORY_GPU_TIMING`, per kind of list ([`Timed`]): lists, their
 /// microseconds from sending to the card's signal, and the microseconds of
-/// the commands noted in them; then the least time of any list (what a
-/// submission of nothing costs, about).
-static LISTS_TIMED: Mutex<([[u64; 3]; 5], u64)> = Mutex::new(([[0; 3]; 5], u64::MAX));
+/// the commands noted in them, the microseconds between stamps put ahead of
+/// and behind them (their time on the card alone), and how many had both
+/// stamps; then the least time of any list (what a submission of nothing
+/// costs, about).
+static LISTS_TIMED: Mutex<([[u64; 5]; 5], u64)> = Mutex::new(([[0; 5]; 5], u64::MAX));
 
 /// A list of kind `kind` took `wall` microseconds from its sending to the
 /// card's signal, `noted` of them in its noted commands (timing run).
-pub(crate) fn list_took(kind: Timed, wall: u64, noted: u64) {
+pub(crate) fn list_took(kind: Timed, wall: u64, noted: u64, card: Option<u64>) {
     let mut t = LISTS_TIMED.lock().unwrap_or_else(|e| e.into_inner());
     let e = &mut t.0[kind.index()];
     e[0] += 1;
     e[1] += wall;
     e[2] += noted;
+    if let Some(card) = card {
+        e[3] += card;
+        e[4] += 1;
+    }
     t.1 = t.1.min(wall);
 }
 
@@ -1433,7 +1439,7 @@ pub(crate) fn log(frames: f64) {
     }
     // The lists of a timing run by kind: the title's, what of their time
     // their commands account for, and ours.
-    let (timed, least) = std::mem::replace(&mut *LISTS_TIMED.lock().unwrap_or_else(|e| e.into_inner()), ([[0; 3]; 5], u64::MAX));
+    let (timed, least) = std::mem::replace(&mut *LISTS_TIMED.lock().unwrap_or_else(|e| e.into_inner()), ([[0; 5]; 5], u64::MAX));
     if timed.iter().any(|t| t[0] > 0) {
         let per = |us: u64| us as f64 / 1e3 / frames;
         let n = |c: u64| c as f64 / frames;
@@ -1463,6 +1469,28 @@ pub(crate) fn log(frames: f64) {
             if least == u64::MAX { 0 } else { least },
             if least == u64::MAX { 0.0 } else { per(least * lists) },
         );
+        // Between the stamps ahead of and behind each group: the card's own
+        // time, without the sending and the signal.
+        if timed.iter().any(|t| t[4] > 0) {
+            let card: u64 = timed.iter().map(|t| t[3]).sum();
+            tracing::info!(
+                "  the card's time by list (timing run), per frame, between stamps around each: {:.1} ms; the title's \
+                 {:.1} ms ({:.0} of {:.0} stamped); preludes {:.1} ms ({:.0}); steps {:.1} ms ({:.0}); compares {:.1} ms \
+                 ({:.0}); others {:.1} ms ({:.0})",
+                per(card),
+                per(title[3]),
+                n(title[4]),
+                n(title[0]),
+                per(prelude[3]),
+                n(prelude[4]),
+                per(steps[3]),
+                n(steps[4]),
+                per(compare[3]),
+                n(compare[4]),
+                per(other[3]),
+                n(other[4]),
+            );
+        }
     }
     let by = COMMANDS_BY_WORK.lock().unwrap_or_else(|e| e.into_inner()).take();
     let mut by: Vec<_> = by.into_iter().flatten().collect();

@@ -185,3 +185,83 @@ mod tests {
         assert!(from <= to && from + near >= sent && to <= done + near, "{sent} {from} {to} {done}");
     }
 }
+
+/// With `VICTORY_GPU_TIMING`: a timestamp list to go ahead of each timed
+/// group and one to go behind it, and where they write. A timing run waits
+/// for every group before it sends the next, so one pair serves them all.
+/// The time between the two is the group's time on the card, without the
+/// sending and the signal (about 270 us a list under Wine, 75 ms a frame).
+struct Bracket {
+    lists: [ID3D12CommandList; 2],
+    back: usize,
+    _kept: (ID3D12CommandAllocator, ID3D12QueryHeap, ID3D12Resource),
+}
+
+// SAFETY: free-threaded objects, and a mapping only read.
+unsafe impl Send for Bracket {}
+// SAFETY: as above.
+unsafe impl Sync for Bracket {}
+
+static BRACKET: OnceLock<Option<Bracket>> = OnceLock::new();
+
+/// The lists ahead of and behind a timed group.
+pub(super) fn bracket() -> Option<[ID3D12CommandList; 2]> {
+    let bracket = BRACKET
+        .get_or_init(|| match host()?.make_bracket() {
+            Ok(b) => Some(b),
+            Err(e) => {
+                tracing::warn!(error = %e, "timed groups without stamps around them");
+                None
+            }
+        })
+        .as_ref()?;
+    // SAFETY: the mapping holds two tick counts; the card is not writing
+    // them now (the last group was waited for).
+    unsafe { std::ptr::write_bytes(bracket.back as *mut u8, 0, 16) };
+    Some(bracket.lists.clone())
+}
+
+/// Microseconds between the two stamps of the last group, once the card ran
+/// it; `None` if a stamp is missing.
+pub(super) fn bracket_us() -> Option<u64> {
+    let bracket = BRACKET.get()?.as_ref()?;
+    // SAFETY: the mapping holds two tick counts the card wrote.
+    let (from, to) = unsafe {
+        let back = bracket.back as *const u64;
+        (back.read_volatile(), back.add(1).read_volatile())
+    };
+    if from == 0 || to < from {
+        return None;
+    }
+    // SAFETY: a plain query.
+    let frequency = unsafe { host()?.queue.GetTimestampFrequency() }.ok()?.max(1);
+    Some(((to - from) as u128 * 1_000_000 / u128::from(frequency)) as u64)
+}
+
+impl Host {
+    fn make_bracket(&self) -> windows::core::Result<Bracket> {
+        let Some((buffer, back)) = self.shared_buffer(16) else {
+            return Err(windows::core::Error::from(windows::Win32::Foundation::E_OUTOFMEMORY));
+        };
+        // SAFETY: plain object creation; a fresh mapping of that size.
+        unsafe {
+            let mut heap: Option<ID3D12QueryHeap> = None;
+            self.device.CreateQueryHeap(
+                &D3D12_QUERY_HEAP_DESC { Type: D3D12_QUERY_HEAP_TYPE_TIMESTAMP, Count: 2, NodeMask: 0 },
+                &mut heap,
+            )?;
+            let heap = heap.ok_or_else(windows::core::Error::empty)?;
+            let allocator: ID3D12CommandAllocator = self.device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT)?;
+            let make = |at: u32| -> windows::core::Result<ID3D12CommandList> {
+                let list: ID3D12GraphicsCommandList =
+                    self.device.CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, &allocator, None)?;
+                list.EndQuery(&heap, D3D12_QUERY_TYPE_TIMESTAMP, at);
+                list.ResolveQueryData(&heap, D3D12_QUERY_TYPE_TIMESTAMP, at, 1, &buffer, u64::from(at) * 8);
+                list.Close()?;
+                list.cast()
+            };
+            let lists = [make(0)?, make(1)?];
+            Ok(Bracket { lists, back: back as usize, _kept: (allocator, heap, buffer) })
+        }
+    }
+}
