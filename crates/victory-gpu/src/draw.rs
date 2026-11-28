@@ -2903,6 +2903,8 @@ impl State {
         }
         // SAFETY: an open list with everything set.
         unsafe { list.list.Dispatch(x, y, z) };
+        #[cfg(feature = "diagnostics")]
+        dispatch_barrier(list);
         self.buffers_written();
         DISPATCHED.fetch_add(1, Ordering::Relaxed);
         if let Some(role) = p.stages.first().and_then(|s| s.shader.ambient)
@@ -4830,5 +4832,19 @@ mod record_hash_tests {
         // (One record of zeros is among the above.)
         let zeros: Vec<u64> = (2..100).map(|n| of(&vec![[0; 3]; n])).collect();
         assert!(zeros.iter().all(|h| seen.insert(*h)));
+    }
+}
+
+/// `VICTORY_DISPATCH_BARRIER=1` (diagnostics): a UAV barrier on everything
+/// after every dispatch, whatever the title's barriers say (to tell an
+/// ordering bug between dependent dispatches, the face network's, from a
+/// wrong result).
+#[cfg(feature = "diagnostics")]
+fn dispatch_barrier(list: &HostList) {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *ON.get_or_init(|| crate::switch::on("VICTORY_DISPATCH_BARRIER")) {
+        let barrier = D3D12_RESOURCE_BARRIER { Type: D3D12_RESOURCE_BARRIER_TYPE_UAV, ..Default::default() };
+        // SAFETY: an open list; no resource named.
+        unsafe { list.list.barriers(&[barrier]) };
     }
 }

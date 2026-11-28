@@ -600,3 +600,77 @@ fn d16_x_loads_read_r16_uint_and_r16_float_views() {
         }
     }
 }
+
+/// A half as bits, for values a half holds exactly.
+fn half_bits(f: f32) -> u32 {
+    if f == 0.0 {
+        return 0;
+    }
+    let b = f.to_bits();
+    let sign = (b >> 16) & 0x8000;
+    let exp = ((b >> 23) & 0xff) as i32 - 127 + 15;
+    assert!((1..31).contains(&exp) && b & 0x1fff == 0, "{f} is not an exact normal half");
+    sign | (exp as u32) << 10 | (b >> 13) & 0x3ff
+}
+
+/// The title's own programs 164a8fa9 (a * b) and 13c8daa0 (a + b) of the
+/// face network (CLAUDE.md 7c), from containers a run saved
+/// (`VICTORY_SHADER_SAVE`) in `VICTORY_FACE_DIR`: each lane `t` reads
+/// element `2*c3 + t` of the view at table dword 0 and `2*c2 + t` of the one
+/// at dword 16, and writes the halves' product or sum to element `2*c0 + t`
+/// of the one at dword 8, all R16G16B16A16_UINT views with `_d16` accesses.
+#[test]
+#[ignore = "needs VICTORY_FACE_DIR with the title's containers"]
+fn face_network_elementwise_programs_compute_on_halves() {
+    let Some(dir) = std::env::var_os("VICTORY_FACE_DIR") else {
+        eprintln!("VICTORY_FACE_DIR unset; skipped");
+        return;
+    };
+    let dir = std::path::PathBuf::from(dir);
+    // 64 elements of four halves: a = 1..8 and negatives, b = 0.5, 2, -0.25, 3.
+    let a: Vec<f32> = (0..256).map(|i| ((i % 8) + 1) as f32 * if i % 3 == 0 { -1.0 } else { 1.0 }).collect();
+    let b: Vec<f32> = (0..256).map(|i| [0.5, 2.0, -0.25, 3.0][i % 4]).collect();
+    let pack = |v: &[f32]| -> Vec<u32> { v.chunks(2).map(|p| half_bits(p[0]) | half_bits(p[1]) << 16).collect() };
+    let (pa, pb) = (pack(&a), pack(&b));
+    for (hash, op) in [("164a8fa92a2c699f", '*'), ("13c8daa0bad76f2a", '+')] {
+        let bytes = std::fs::read(dir.join(format!("{hash}.compute.cdxil"))).expect("container");
+        let shader = super::translate(&bytes).expect("translate");
+        eprintln!("{hash}: user data {:?}, root srvs {:?}", shader.user_data, shader.root_srvs);
+        let want: Vec<f32> = a.iter().zip(&b).map(|(x, y)| if op == '*' { x * y } else { x + y }).collect();
+        let want = pack(&want);
+        let _one = super::valu_tests::ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+        for (label, warp) in [("hardware", false), ("warp", true)] {
+            let Ok(host) = Host::new(warp) else {
+                eprintln!("no SM 6.6 {label} device; skipped");
+                continue;
+            };
+            let (root, pso) = host.compute_pipeline(&shader).unwrap_or_else(|e| panic!("{label}: {e}"));
+            let mut ud = vec![0u32; shader.user_data_dwords().max(1) as usize];
+            for u in &shader.user_data {
+                // The table at view 0; constants c0, c1, c2 = 0, count = 64.
+                ud[u.index as usize] = match u.root {
+                    RootType::Constants if u.dword == 3 => 64,
+                    _ => 0,
+                };
+            }
+            let views = [
+                View::DataUav(DXGI_FORMAT_R16G16B16A16_UINT, &pa, 8),
+                View::TypedUav(DXGI_FORMAT_R16G16B16A16_UINT, 64, 8),
+                View::DataUav(DXGI_FORMAT_R16G16B16A16_UINT, &pb, 8),
+            ];
+            let int = 8 | VIEW_INTEGER;
+            let mut roots = vec![(0, Root::Constants(ud))];
+            if !shader.root_srvs.is_empty() {
+                roots.push((1, Root::View { srv: true, data: vec![int, int, int] }));
+            }
+            let words = host
+                .dispatch(&root, &pso, &Dispatch { roots, views: &views, samplers: &[], groups: [1, 1, 1] })
+                .unwrap_or_else(|e| panic!("{label}: dispatch failed: {e}"));
+            let got = &words[1];
+            let bad: Vec<usize> = (0..want.len()).filter(|&i| got[i] != want[i]).collect();
+            eprintln!("{hash} {label}: {} of {} words wrong; first: {:?}", bad.len(), want.len(),
+                bad.iter().take(6).map(|&i| (i, format!("{:08x}", pa[i]), format!("{:08x}", pb[i]), format!("{:08x}", want[i]), format!("{:08x}", got[i]))).collect::<Vec<_>>());
+            assert!(bad.is_empty(), "{hash} {label}: the halves' {op} is wrong");
+        }
+    }
+}

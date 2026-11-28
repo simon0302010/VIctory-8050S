@@ -1119,6 +1119,9 @@ pub enum View<'a> {
     /// A typed buffer UAV in this format, of this many elements of this many
     /// bytes, zeroed.
     TypedUav(DXGI_FORMAT, u32, u32),
+    /// A typed buffer UAV in this format over these dwords, of elements of
+    /// this many bytes.
+    DataUav(DXGI_FORMAT, &'a [u32], u32),
     /// A constant buffer of these dwords.
     Cbv(&'a [u32]),
     /// A buffer SRV over these dwords.
@@ -1355,7 +1358,7 @@ impl Host {
                         );
                         keep.push(tex);
                     }
-                    View::RawUav(_) | View::HalfUav(_) | View::TypedUav(..) => {
+                    View::RawUav(_) | View::HalfUav(_) | View::TypedUav(..) | View::DataUav(..) => {
                         // (dwords, format, elements, flags)
                         let (n, format, elements, flags) = match *v {
                             View::HalfUav(e) => (
@@ -1370,6 +1373,12 @@ impl Host {
                             View::RawUav(n) => {
                                 (n, DXGI_FORMAT_R32_TYPELESS, n, D3D12_BUFFER_UAV_FLAG_RAW)
                             }
+                            View::DataUav(format, data, bytes) => (
+                                data.len() as u32,
+                                format,
+                                data.len() as u32 * 4 / bytes,
+                                D3D12_BUFFER_UAV_FLAG_NONE,
+                            ),
                             _ => unreachable!(),
                         };
                         let bytes = u64::from(n) * 4;
@@ -1378,6 +1387,16 @@ impl Host {
                             &buffer(bytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS),
                             D3D12_RESOURCE_STATE_COMMON,
                         )?;
+                        if let View::DataUav(_, data, _) = *v {
+                            let up = upload(data)?;
+                            list.CopyBufferRegion(&b, 0, &up, 0, bytes);
+                            list.ResourceBarrier(&[transition(
+                                &b,
+                                D3D12_RESOURCE_STATE_COPY_DEST,
+                                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                            )]);
+                            keep.push(up);
+                        }
                         let desc = D3D12_UNORDERED_ACCESS_VIEW_DESC {
                             Format: format,
                             ViewDimension: D3D12_UAV_DIMENSION_BUFFER,

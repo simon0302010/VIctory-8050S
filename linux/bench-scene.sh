@@ -18,7 +18,8 @@ keys=$(seq 10 5 200 | sed 's/$/:Enter/' | paste -sd,)
 
 # (The renderer patches come from victory's Linux defaults, apps/victory/src/main.rs.)
 
-VICTORY_KEYS=$keys timeout 600 victory-sandbox run --no-audio ${BENCH_RUN_ARGS:-} >/dev/null 2>&1 &
+audio=--no-audio; [ "${BENCH_AUDIO:-0}" = 1 ] && audio=--audio   # sound off unless asked
+VICTORY_KEYS=$keys timeout 600 victory-sandbox run $audio ${BENCH_RUN_ARGS:-} >/dev/null 2>&1 &
 runner=$!
 
 in_game() { grep -cE 'INFO.*victory_gpu::host.* fps, .* [0-9]{3,} draws/frame' "$1" 2>/dev/null; true; }
