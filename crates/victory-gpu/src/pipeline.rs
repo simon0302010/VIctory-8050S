@@ -515,6 +515,16 @@ fn skipped_shader(p: &Pipeline) -> Option<&str> {
         .map(|shader| shader.hash.as_str())
 }
 
+/// Of pipeline `this`: the index in `hashes` of a shader it has
+/// (diagnostics, `crate::bufdump`).
+#[cfg(all(windows, feature = "diagnostics"))]
+pub(crate) fn shader_among(this: This, hashes: &[String]) -> Option<usize> {
+    pipeline(this)
+        .shaders
+        .iter()
+        .find_map(|shader| hashes.iter().position(|h| *h == shader.hash))
+}
+
 #[cfg(all(windows, feature = "diagnostics"))]
 pub(crate) fn is_skipped(this: This) -> bool {
     !this.is_null() && skipped_shader(pipeline(this)).is_some()

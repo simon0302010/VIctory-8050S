@@ -158,6 +158,10 @@ crate::fast_local! {
     /// milliseconds and the bytes that run may take, in place of the
     /// pass's own per frame.
     static PASS_BUDGET: std::cell::Cell<Option<(u64, u64, bool)>> = const { std::cell::Cell::new(None) };
+    /// While a dispatch of a program `VICTORY_BUFDUMP` names is bound: which
+    /// of its hashes (`crate::bufdump`).
+    #[cfg_attr(not(feature = "diagnostics"), allow(dead_code))]
+    static BUFDUMP: std::cell::Cell<Option<u8>> = const { std::cell::Cell::new(None) };
 }
 
 /// The milliseconds of every frame the pass that uploads textures picked
@@ -1542,6 +1546,18 @@ impl State {
     /// False if the draw or dispatch must not run: a root SRV it reads
     /// could not be given a view.
     pub(crate) fn bind(&mut self, list: &HostList, p: &HostPipeline, compute: bool) -> bool {
+        #[cfg(feature = "diagnostics")]
+        {
+            BUFDUMP.set(if compute { crate::bufdump::watched(self.pipeline as This) } else { None });
+            let bound = self.bind_now(list, p, compute);
+            BUFDUMP.set(None);
+            bound
+        }
+        #[cfg(not(feature = "diagnostics"))]
+        self.bind_now(list, p, compute)
+    }
+
+    fn bind_now(&mut self, list: &HostList, p: &HostPipeline, compute: bool) -> bool {
         let l = &list.list;
         // Textures picked by index, before anything asks for them.
         self.early_textures(list, p, compute);
@@ -4430,6 +4446,14 @@ fn readable(list: &HostList, kind: ResourceType, view: &View) {
     // what shaders write through unordered access goes back to it after.
     if let Some((shadow, address, len)) = crate::descriptor::host::buffer_copy(view) {
         shadow.refresh(list, address, len);
+        #[cfg(feature = "diagnostics")]
+        if let Some(hash) = BUFDUMP.get() {
+            let format = match view {
+                View::Shader(_, Some(d)) | View::Unordered(_, _, Some(d)) => d[0],
+                _ => 0,
+            };
+            crate::bufdump::note(hash, kind == ResourceType::Uav, format, &shadow, address, len);
+        }
         if kind == ResourceType::Uav {
             // A shader that cannot store to buffers leaves the range as
             // the title has it: nothing to find afterwards.

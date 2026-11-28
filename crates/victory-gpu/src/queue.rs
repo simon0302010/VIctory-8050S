@@ -978,6 +978,7 @@ extern "system" fn present(
         if crate::capture::listed(frame) {
             before_sync();
             crate::capture::dump_targets(frame);
+            crate::bufdump::dump(frame);
         }
     }
     #[cfg(windows)]
