@@ -282,11 +282,8 @@ Found and fixed:
   they build fine now (`VICTORY_WARM_BAD=0` run). File emptied, backup
   `warm-bad.txt.bak-2026-11-27`.
 Still wrong (user confirms; existed before this session):
-- **Heads missing** for most characters (hair, eyebrows, eyeballs, teeth float),
-  some faces fine; skin elsewhere green (arms/neck, frame 2836 of
-  shots-warmbad). No draw is dropped except the RT structure builder (ops
-  files): heads are drawn but invisible → likely texture/descriptor data
-  wrong (e.g. an alpha/dither mask reading 0), not missing pipelines.
+- ~~Heads missing~~ fixed 2026-11-28 (see below). Skin elsewhere green
+  (arms/neck, frame 2836 of shots-warmbad): not rechecked since.
 - **Black noise** on textures and floors; **black triangles/planes** blinking.
 - Checkerboard/comb artifacts on some surfaces (shadow edges, windows).
 Other forks (trustno1-coder/VIctory-NVIDIA, DexNom/VIctory, Marvisak/VIctory
@@ -295,154 +292,75 @@ merge of upstream/main: 72 files in conflict (host.rs 63 hunks, draw.rs 46,
 descriptor/host.rs 30). Single DexNom fixes (921d8d3b sparse textures) don't
 apply either. Integer-target blending (DexNom ddb73326) we already have.
 
-Follow-up (2026-11-28): merged `port-fixes` (5 fixes from trustno1's fork:
-placed-view padding, BC7 rotation, raw view clamp, dynamic slots per heap,
-ambient violet) — heads still missing. Then `d583dc23`: d16 typed accesses
-through UINT views in **descriptor tables** now keep their bits (before
-only heap-picked views; host writes the stride-table dword for dynamic
-slots too). Upstream's `stride_tests` ported (`emit/stride_tests.rs`), all
-pass on RADV — so RADV passes the bits; but **heads still missing** (user,
-in game). So the face network's 16-bit path is not (or not the only) cause.
-Unknown: which pipelines are the face network (`compute_graph_ops:*` inside
-the title's .rpf archives; our logs have only hashes) and whether they run.
-Test-suite note: `emit::tests::stub_pipeline_is_created` fails under
-vkd3d-proton (it does not check DXIL hashes) — not a regression.
+### 7d. The 2026-11-28 sessions: heads fixed, what was learned
 
-**Heads found (2026-11-28):** skipping four compute programs brings the
-heads back (user, in game): `VICTORY_SKIP_PIPELINES=6a04b371a8e26853,
-164a8fa92a2c699f,13c8daa0bad76f2a,da2fdff4709c3189` (now a Linux default;
-only diagnostics builds honour it). They write R16G16B16A16_UINT buffers
-before the scene pass: 6a04b371 ~90 dispatches/frame (mostly 1x1x1 and
-8x1x1, one per character?) into a 24 MB buffer (table UAV u4, title
-0xc6d8e0000+0x1800000, plus an R16G16B16A16_FLOAT view u6, and a constant
-u5 stepping by 242 per dispatch — not a heap index, the ops file's
-"[heap n: null]" for it is meaningless); 164a8fa9/13c8daa0/da2fdff4 100x1x1
-on a ~800 KB R16G16B16A16_UINT UAV. Likely the face network / head morphs
-whose output the head's mesh shader adds; their output on our stack is
-garbage (NaN or huge offsets → head invisible). The skip is a workaround:
-faces likely lose expressions. **The user is NOT happy with this workaround
-(2026-11-28): it is a stopgap, not a solution. Top priority next session: find
-and fix what these programs compute wrong, then remove the skip from the Linux
-defaults.** The picture overall is also not acceptable yet (lighting, noise,
-black geometry, artifacts). Next: find what is wrong in these programs'
-translation or inputs — e.g. dump their UAV after a frame (compare with
-what upstream's 4243a96a describes), check their d16/typed accesses and
-wave ops (wave.rs mentions `CS_TransposeVecMatMulAlignedOperation`'s
-WaveActiveSum of halves), and whether they read title memory our refresh
-leaves stale. How it was found: frame-1036-ops.txt of shots-warmbad, the
-scene pass is all mesh shaders; grep the ops for views of format 12/57.
+**Heads (FIXED, commit `8698b5de`).** In ~3 of 4 runs every character lacked
+the skin of its head (hair, eyes, teeth floating) for the whole run; good
+runs had all faces. Cause: the pipeline wait budget (`pipeline/make.rs`
+`wait`, `VICTORY_PIPELINE_WAIT_MS` 500, shared across threads) was taken
+whole by the first waiting thread; other recording threads meeting an
+unmade pipeline meanwhile dropped their draw at once. At world entry 63-174
+draws were dropped per run; bad runs always included compute
+`7879df3c227ee5ad` (one-time, world's first frame). Fix: concurrent waiters
+share one wall-clock deadline. Result: 0 drops, faces 6/6 runs; the
+4-program `VICTORY_SKIP_PIPELINES` default removed (median 67-70 ms after).
+Found by naming shaders in the "DROPPED being made: <hashes>" listing lines
+and diffing good vs bad runs.
+- **Lesson: a picture bug that is all-or-nothing per run → diff what loading
+  dropped / did between good and bad runs. Judge only over 3-6 runs; single
+  runs misled the whole day** (the 4-program skip, the "d583dc23
+  regression", a TLS theory were all noise).
+- **Still to check: facial expressions.** The four face-network programs
+  (6a04b371, 164a8fa9, 13c8daa0, da2fdff4; 20 programs in the face list of
+  frame-1152-ops) run again now. 164a8fa9/13c8daa0 are exact on RADV
+  (test `face_network_elementwise_programs_compute_on_halves`); the others
+  untested; nobody has looked at a talking close-up yet (diner waitress
+  ~world+300). Next: capture a frame sequence of a dialogue and compare
+  mouth shapes, or ask the user to watch.
 
-**Heads, 2026-11-28 session 2 (commit `e3cf0517`, tool `VICTORY_BUFDUMP`):**
-- `VICTORY_BUFDUMP=<hashes>` + `VICTORY_CAPTURE`: buffer views those
-  programs bind are read back at captured frames (`frame-<n>-buf-*.bin` +
-  summary line; `crates/victory-gpu/src/bufdump.rs`). The summary's
-  "NaN as halves" means nothing for UINT data (0xFFFF/0x7FFF are small
-  ints). Run `runtime/logs/bufdump-1795855263`: 6a04b371, 164a8fa9 and
-  13c8daa0 all write the same 24 MB buffer at 0xc6da60000 (a scratch
-  heap: triangle indices at +0x80000, float32 positions at +0x200000,
-  float32 pairs with noisy low 16 bits at +0x10c0000). The 24 MB buffer is
-  also read by mesh shaders ba8d52f4/f2b41c69/4f23fd8d (head draw
-  candidates). da2fdff4 writes other buffers (0x1bd9e0000 etc.) and runs
-  only a few frames (not every frame). 6a04b371's u6 is a placed R8G8B8A8
-  texture SRV at 0x9bfe0000, not a FLOAT UAV as noted above.
-- Screenshot bisection (`VICTORY_CAPTURE_WORLD_ALSO=300,320`, the intro
-  diner scene, waitress close-up at world+300): skip only 6a / only
-  164+13c / only da2 / all but da2 / all but 6a: all headless. **Control
-  with all four skipped (the Linux default) is headless too** (run
-  `bisect-control-all4-1795856953`, frames 1300/1320: hair, teeth, eyes
-  float). So in this scene the skip does not help; the user's "heads come
-  back" was seen elsewhere in game (where? ask), or heads are flaky
-  between runs. The skip workaround's premise is not reproduced: the
-  four programs may be innocent.
+**Other things established that day (keep):**
+- Translator cache: keyed by `victory_shader::TRANSLATOR_VERSION` (now 2);
+  **bump it whenever the translator changes**, or old translations are
+  served silently. `VICTORY_SHADER_KEY=source` = a separate cache set per
+  build (used for tests). Warm-up redone for version 2 (83,556, 0 bad).
+- d583dc23's host half removed; its table d16 lookup is `VICTORY_D16_TABLES=1`
+  (off, in the cache key).
+- `fast_local`: TLS index ≥64 read via `TlsGetValue` (harmless fix).
+- The title's GPU timestamps say 65-130 ms/frame (written at submission
+  end); `VICTORY_TITLE_GPU_MS=<ms>` fakes them. No effect on heads.
+- Head-skin bake at load (d126bcae/fcee6129/c0a7fe77 into 2048² targets →
+  95988cc1 BC-encodes into R32G32B32A32_UINT 32x32/1x1 scratch → copies into
+  128x128 BC3): works, identical in good and bad runs.
+- Ruled out as picture causes: late wait off, card copies off, card steps,
+  barrier after every dispatch, bake upload budget, sound, dstorage (no
+  request failures in any run), `VICTORY_INPLACE=1`.
+- DexNom/VIctory (remote `dexnom`, fetched; merge base ffe310eb 11-24, 340
+  commits theirs): their dstorage page-0 fix (d09f3aa8) does not apply (our
+  retry path differs; no failures logged). Their GPU commits not in our tree
+  are listed by `git log ffe310eb..dexnom/main -- crates/victory-gpu`;
+  candidates for the remaining picture bugs: 921d8d3b (quad sampling, sparse
+  textures), bc3cd4b0, cd94d353/940d32f6 (shader-written pages), 4051149c,
+  0f637570/27c3dc9d (page table for raw addresses), 77053a0c (shader
+  accuracy), 13bbd6fe. Most will not cherry-pick cleanly.
 
-**The shader cache hid translator changes (2026-11-28, important):**
-translations are keyed by `victory_shader::TRANSLATOR_VERSION`, which has
-been 1 since 1162d38f (11-26 00:18) and was never bumped, so every run
-served translations made by whatever older translator build first met a
-shader (the merges of 11-26, d583dc23, ...). Last night's "heads with the
-skip" run (shots-skipface, 00:24) used such a mix. Today the exact same
-code (4e3fe1ad rebuilt) and command were headless, and after one run with
-`VICTORY_SHADER_FRESH=1` (re-translates and *overwrites* old-build entries)
-the picture got worse (the two men at the start, always fine before, got
-block heads; user). So the current translator is worse than some older
-build whose entries were lost. Not the cause: d583dc23's table lookup
-(`VICTORY_D16_TABLES=0`, now a switch and part of the cache key: still
-headless), card copies, card steps, a UAV barrier after every dispatch,
-sound. The title's 164a8fa9/13c8daa0 compute right on RADV (test
-`face_network_elementwise_programs_compute_on_halves`). Next: bisect the
-translator with `VICTORY_SHADER_KEY=source` (a separate cache set per
-build, the main set untouched) over the victory-shader commits since
-11-25, judging the two men at the start (world+80..300) and the diner
-close-up; then bump TRANSLATOR_VERSION. Runs end early with "title
-suspended; ending the title" when the game window loses focus.
-Backups: `runtime/state-backup-2026-11-28` (game state).
-
-**Later the same day (after 2ec74d83, warm cache rebuilt for translator
-version 2, disk had been full and broke the first warm-up):** the current
-code is equivalent to the pre-d583dc23 build, yet warm runs are headless
-(prison inmate at world+30, frame shots-fixed/frame-1053.png; last night's
-shots-skipface/frame-1016.png had a face). In-run fresh translations
-(`VICTORY_SHADER_KEY=source`) looked headless too. **Skipping all 20 compute
-programs of the face list** (list 0x1160d980 in frame-1152-ops: 6a04b371,
-7de0f9db, a06ef094, 7a38ed7f, 5e5d98e4, 0709e835, f8425d3c, 6b176df5,
-d4bc6660, 164a8fa9, 13c8daa0, 7dfd9a07, e8820cb2, b22a16a1, aaf7da7a,
-7933a53d, 3d65925d, 21e30428, 0aa79340, da2fdff4): the hoodie protagonist
-is still headless. So the face network is not (only) the cause; the
-4-program skip default has no reliable effect, and the runs with faces
-(laggy ones) point at timing (pipelines still compiling, draws dropped or
-data not yet there). Next: the head draws themselves (mesh shaders reading
-the 24 MB buffer: ba8d52f4, f2b41c69, 4f23fd8d; their inputs and outputs),
-or what a laggy run does differently (dropped draws at the start).
-
-**Heads, what is established (2026-11-28, evening; runs rep*, rep2-*, tg-*):**
-- Random per run with identical code and settings: about 1 run in 4-5 has
-  all faces (rep-cur1 good / rep-cur2 bad, same build). Every single-run
-  conclusion of the day before this was noise: the 4-program skip, the
-  d583dc23 'regression', the TLS idea. Judge only over several runs.
-- In bad runs **the title does not issue the head-skin draws at all**:
-  frame world+30 (inmate close-up), good run tg-t2 vs bad tg-t1/t3/t4:
-  mesh 51ff151f+pixel 7fe75645 (2x), mesh fd3e0589+pixel efc089fe (2x),
-  mesh 6e94bb01+pixel 5ab0067a (1x) are drawn only in the good run; in the
-  bad ones their pipelines exist and are bound in other frames, nothing is
-  dropped. G-buffer dumps (VICTORY_DUMP_TARGETS): good: face in the colour
-  target, head in normals and the material target; bad: a flat dark blob
-  in colour, head absent from the other targets (eyes, teeth, hair drawn).
-  So a CPU-side decision of the title, not shading.
-- Not the cause (each over 2-5 runs): face network (all 20 programs
-  skipped), translation of its programs (exact on RADV), late wait /
-  async (VICTORY_LATE_WAIT=0), card copies, card steps, a barrier after
-  every dispatch, the title's GPU time (VICTORY_TITLE_GPU_MS=10), the
-  bake's upload budget (VICTORY_BAKE_TEXTURES_MS=600000) and
-  VICTORY_TEXTURE_NO_WAIT=0, sound, streaming/dstorage counters (same),
-  log warnings (same kinds).
-- The bake (heads' skin decorations, at load): draws d126bcae/fcee6129/
-  c0a7fe77 into 2048x2048 targets, dc33a831 copies, 88994c34/13dfdd3b
-  make levels, 95988cc1 BC-encodes into R32G32B32A32_UINT scratch textures
-  (32x32 with 6 levels, 1x1), then CopyTextureRegion into 128x128 BC3
-  (f78) textures. Those hold data right after (VICTORY_DUMP_BAKES=1, log
-  'its first level's bytes'); no title-filled texture overlaps them.
-- Next: find what the title's CPU checks before drawing a head (a fence or
-  value it polls, a readback, an asset state). Ideas: VICTORY_READ_WATCH on
-  the bake's outputs; compare the title's fence waits/values between a good
-  and a bad run; trace the draw call site (+caller) of 51ff151f in a good
-  run and see what branch skips it in a bad one.
-
-**Heads FIXED (2026-11-28, late):** the cause was the pipeline wait
-budget (`pipeline/make.rs` `wait`). With `VICTORY_PIPELINE_WAIT_SHARED` (on)
-the first thread to wait took the frame's whole remaining budget for the
-length of its wait; any other recording thread meeting an unmade pipeline
-meanwhile saw zero left and dropped its draw/dispatch at once (so even
-`VICTORY_PIPELINE_WAIT_MS=15000` changed nothing). At world entry 63-174
-draws were dropped "being made" per run; in every bad run they included
-compute `7879df3c227ee5ad` (with mesh 09dcdb58, 3d8783a4) in the world's
-first frame, never in a good run: a one-time program whose output the
-head-skin draws depend on for the whole run. Found by putting the shader
-hashes into the 'DROPPED being made' listing lines and diffing good vs bad
-runs (tg-dm*). Now concurrent waiters share one wall-clock deadline: 0
-drops, faces in 6/6 runs (tg-fx*), median unchanged; the 4-program
-`VICTORY_SKIP_PIPELINES` default is removed (3 runs without it: faces,
-median 67-70). Lesson: per-run all-or-nothing picture bugs → look at what
-loading drops.
+**Diagnostic tools added (diagnostics builds):**
+- `VICTORY_CAPTURE='Z:\victory\logs\<dir>'` + `VICTORY_CAPTURE_WORLD=1`
+  (+ `VICTORY_CAPTURE_WORLD_ALSO=30,300`) or `VICTORY_CAPTURE_FRAMES=a,b`:
+  screenshots + `frame-N-ops.txt` (every op, drops with shader hashes;
+  ops span several lines: join with awk on `^[0-9]+ list `).
+- `VICTORY_DUMP_TARGETS=1`: every render target/copy destination of listed
+  frames as PNG (G-buffer: 1280x720 f27 colour, f28 normals/material);
+  unsupported formats log their non-zero byte count.
+- `VICTORY_DUMP_BAKES=1`: lists the first 8 frames with a bake draw.
+- `VICTORY_BUFDUMP=<hashes>`: buffers those programs bind, read back.
+- `VICTORY_DISPATCH_BARRIER=1`, `VICTORY_SKIP_PIPELINES=<hashes>`.
+- Logs: "the title's GPU time as its timestamp pairs say", "a texture the
+  host writes and one filled from title memory overlap", "a block texture of
+  the bake".
+- Scripts `linux/check/faces.sh <label>` (screens at world+30/+300 into a
+  contact sheet) and `linux/check/targets-at-world.sh <label>` (G-buffer
+  dump at world+30); sheets go to `$CHECK_OUT` (default /tmp). Both use
+  `VICTORY_SHADER_KEY=source`.
 
 Still open in the picture: odd lighting, black noise on textures/floors,
 black triangles/planes blinking, checkerboard/comb artifacts.
