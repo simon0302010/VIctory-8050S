@@ -113,6 +113,16 @@ What was found on the way, measured:
   (`crates/victory-gpu/src/pipeline/make.rs` `wait`): no draws dropped while
   pipelines are made, faces in 6 runs out of 6. (The earlier four-program
   skip was a workaround with no real effect and is gone.)
+- **Black or green-speckled faces**: in 2 runs of 3 a character's face
+  skin was black (or speckled green) for the whole run, already in the
+  colour G-buffer. The title bakes each character's head skin once while
+  it loads, from textures it picks by index; the pass that uploads those
+  textures before a bake refused new ones once the card was at its memory
+  line (the 10.8 GB RADV reports), which every run reaches 5-15 s after the
+  first bake. The bake then sampled nothing (black) or a slot's old texture
+  (green). Now a pass ahead of a bake makes them past the line
+  (`VICTORY_BAKE_OVER_LINE_MB`, 1024 per pass; 0-1.6 GB per run in all):
+  faces right in 6 runs of 6, frame time unchanged (63-67 ms).
 - **Indirect light**: with ray tracing off, rooms and faces had only direct
   light; `VICTORY_AMBIENT=1` (the stand-in estimated from the frame) is a
   Linux default now.

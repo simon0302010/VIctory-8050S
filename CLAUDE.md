@@ -318,6 +318,23 @@ and diffing good vs bad runs.
   ~world+300). Next: capture a frame sequence of a dialogue and compare
   mouth shapes, or ask the user to watch.
 
+**Black / green-speckled face skin (FIXED, 2026-11-28 evening).** Per run
+(3 states seen in 3 runs: black, green specks, right; diner close-up
+world+312..348, the shot shifts with frame rate, so capture several
+offsets). Bad already in the albedo G-buffer (f27). Cause: the bake's
+texture pass (`draw.rs` `early_textures` → `heap_textures`) refused new
+textures once `resource::room` was false (card at its line, reached 5-15 s
+after the first bake in every run); refused slots are also *held* ~4 s and
+not even due. Fix: a bake pass over the line releases held slots and makes
+textures past it, `VICTORY_BAKE_OVER_LINE_MB` (1024/pass; 0 = old); log
+"textures a bake picks are made past the card's line". 6/6 runs right,
+median 63-67 ms (unchanged). Expressions themselves animate (brows/mouth
+change across inmate close-up frames); a talking close-up mouth check is
+still open. Eyes look glowing white in diner close-ups (not looked at).
+Scripts used: `shot.sh`/`dtg.sh` patterns = `linux/check/faces.sh` with
+`VICTORY_CAPTURE_WORLD_ALSO=300,312,324,336,348` (create the capture dir
+first, or nothing is written).
+
 **Other things established that day (keep):**
 - Translator cache: keyed by `victory_shader::TRANSLATOR_VERSION` (now 2);
   **bump it whenever the translator changes**, or old translations are

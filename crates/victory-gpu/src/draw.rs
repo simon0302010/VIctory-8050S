@@ -242,6 +242,20 @@ const BAKE_PIXEL_SHADERS: [&str; 6] = [
     "fcee612943c008e0",
 ];
 
+/// The bytes a pass ahead of a bake draw may make past the card's line
+/// (`VICTORY_BAKE_OVER_LINE_MB`, 1024; 0: none, refused as any other).
+fn bake_over_line() -> u64 {
+    static BYTES: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *BYTES.get_or_init(|| {
+        std::env::var("VICTORY_BAKE_OVER_LINE_MB").ok().and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(1024)
+            << 20
+    })
+}
+
+/// Since the start: passes ahead of a bake that found the card at its
+/// line and made textures past it, and their bytes.
+static BAKE_OVER_LINE: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
+
 /// Since the start: early runs of the texture pass, and those of them
 /// made for a bake draw.
 pub(crate) static EARLY_TEXTURE_PASSES: [AtomicU64; 2] = [AtomicU64::new(0), AtomicU64::new(0)];
@@ -2355,6 +2369,19 @@ impl State {
             once!("textures picked by index: the card has no room for more; they wait");
         }
         let mut refused = 0;
+        // A pass ahead of a bake draw makes its textures past the line
+        // (up to `bake_over_line` bytes): the bake samples them once, and
+        // what it bakes stays for the run. Refused there, a character's
+        // head skin came out black, or of whatever the slot showed before
+        // (green specks), in 2 of 3 runs (diner close-up, world+312-348,
+        // 2026-11-28): the card reaches its line 5-15 s after the first
+        // bake, while characters still load. The slots held back go with
+        // it, or the bake's own may not even be due.
+        let over_line = !room && PASS_BUDGET.get().is_some_and(|(_, _, bake)| bake) && bake_over_line() > 0;
+        if over_line {
+            room = true;
+            BAKE_OVER_LINE[0].fetch_add(1, Ordering::Relaxed);
+        }
         // Room again: the slots held back while the card was full are due
         // now (`full_card_pass`).
         if room {
@@ -2459,6 +2486,8 @@ impl State {
                 crate::texture::live_staging_bytes(),
             )
         };
+        let spent_before = SPENT.load(Ordering::Relaxed);
+        let bytes_at_most = if over_line { bytes_at_most.min(spent_before + bake_over_line()) } else { bytes_at_most };
         let began = std::time::Instant::now();
         BAKE_SERVED.store(0, Ordering::Relaxed);
         let mut served = true;
@@ -2793,7 +2822,7 @@ impl State {
             crate::texture::unstage(resource);
             SPENT.fetch_add(bytes, Ordering::Relaxed);
             since_asked += bytes;
-            if room && since_asked >= 32 << 20 {
+            if room && !over_line && since_asked >= 32 << 20 {
                 since_asked = 0;
                 room = crate::resource::room(crate::host::host().and_then(|h| h.video_memory()));
             }
@@ -2810,6 +2839,21 @@ impl State {
         }
         if baking && served {
             BAKE_SERVED.store(host.texture_news().0 + 1, Ordering::Relaxed);
+        }
+        if over_line {
+            let bytes = SPENT.load(Ordering::Relaxed).saturating_sub(spent_before);
+            let total = BAKE_OVER_LINE[1].fetch_add(bytes, Ordering::Relaxed) + bytes;
+            let passes = BAKE_OVER_LINE[0].load(Ordering::Relaxed);
+            if passes.is_power_of_two() {
+                tracing::info!(
+                    frame,
+                    passes,
+                    mb_this_pass = bytes >> 20,
+                    mb_so_far = total >> 20,
+                    served,
+                    "textures a bake picks are made past the card's line (VICTORY_BAKE_OVER_LINE_MB)"
+                );
+            }
         }
     }
 
