@@ -2908,9 +2908,10 @@ impl HostHeap {
     /// Makes slot `index` (a dynamic one) from `view`; a null view if the
     /// host cannot.
     pub(crate) fn make_at(&self, index: u32, view: &View) {
-        // Dynamic slots are table entries too: their stride-table dword is
-        // what a table's d16 access asks (the face network's UINT views).
-        self.note_view_word(index, Some(view));
+        // (d583dc23 wrote the slot's stride-table dword and view address
+        // here too, for tables' d16 accesses: with it the heads and the
+        // lighting got worse, the two men at the intro's start too; user,
+        // 2026-11-28. Left out until it is understood.)
         let kept = make_twinned(view, self.at(index), self.twin(index));
         if kept.is_none() {
             null_for(view, self.at(index));
@@ -2958,7 +2959,6 @@ impl HostHeap {
                 views.made.insert(words, ListView { view, at, twin, kept, listed });
             }
             let made = &views.made[&words];
-            self.note_view_word(index, Some(&made.view));
             self.copy_from(index, views.slot(made.at));
             if made.twin && twins {
                 self.copy_from(self.raw + index, views.slot(made.at + 1));
@@ -2988,7 +2988,6 @@ impl HostHeap {
         if self.sampler {
             self.null_sampler(index);
         } else {
-            self.note_view_word(index, None);
             null_view(self.at(index));
             self.put(index);
         }

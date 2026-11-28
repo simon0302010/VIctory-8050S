@@ -14133,9 +14133,10 @@ mod tests {
 
 /// Whether d16 typed accesses through views in descriptor tables read the
 /// view-stride table for the view's format kind (d583dc23).
-/// `VICTORY_D16_TABLES=0` turns it off (diagnostics of a regression: with it
-/// on and fresh translations the picture got worse, 2026-11-28).
+/// Off unless `VICTORY_D16_TABLES=1`: d583dc23 with it (and the host's
+/// stride words for dynamic slots) made heads and lighting worse once the
+/// translations were fresh (2026-11-28); before it they were right.
 fn tables_on() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("VICTORY_D16_TABLES").is_none_or(|v| v != "0"))
+    *ON.get_or_init(|| std::env::var_os("VICTORY_D16_TABLES").is_some_and(|v| v == "1"))
 }

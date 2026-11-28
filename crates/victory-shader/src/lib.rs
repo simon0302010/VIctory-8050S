@@ -26,7 +26,9 @@ pub mod structure;
 /// translated before is kept across the rebuild. `victory shaders`
 /// translates again what an earlier build of the translator cached and says
 /// how many came out different: if any did, the bump was due.
-pub const TRANSLATOR_VERSION: u32 = 1;
+// 2: from 1162d38f (11-26) to d583dc23 (11-28) it stayed 1, and runs served
+// translations of whatever older build first met a shader (CLAUDE.md 7c).
+pub const TRANSLATOR_VERSION: u32 = 2;
 
 pub use dxbc::{Container, FourCC, Part};
 pub use dxil::{DxilProgram, ShaderKind, XboxExtras};
