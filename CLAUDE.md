@@ -43,7 +43,7 @@ decided, update the relevant section here **and** the README, then commit.
 | Upstream sources for reference/building | `/home/simon/Dokumente/Rust/victory/upstream-src/` : `vkd3d-proton` (at cae8353e), `proton-wine` (ValveSoftware proton_11.0, sparse), `ge-proton` (GE-Proton11-14 tag with `wine`, `wine-staging`, `wineopenxr` submodules; `build-server/` holds our wineserver build) |
 | cool_fox (source of the 5 cherry-picked commits) | `https://github.com/DoubleGhosty/cool_fox` |
 
-Linux defaults now include `VICTORY_PORT_CONSTANTS=0` (port 1 off), `VICTORY_CARD_STEPS=1`, `VICTORY_AMBIENT=1` and the four-shader `VICTORY_SKIP_PIPELINES` (heads workaround, see 7c). Compare runs by the median of the last 9 frame lines (streamed in); the first lines are loading.
+Linux defaults now include `VICTORY_PORT_CONSTANTS=0` (port 1 off), `VICTORY_CARD_STEPS=1`, `VICTORY_AMBIENT=1` (the four-shader skip is gone: heads fixed, see 7c). Compare runs by the median of the last 9 frame lines (streamed in); the first lines are loading.
 
 Current sandbox settings: `repo` = this checkout, `proton` = the `-victory`
 copy, `build_args = -p victory --features diagnostics` (needed for
@@ -81,6 +81,7 @@ VICTORY_X=1 linux/bench-scene.sh ...  # extra switches come from the environment
 - **Never `pkill -f 'victory.exe run'`**: it matches the calling shell's own command line and kills the tool call (exit 144). Use `pkill -f '[v]ictory.exe run'`.
 - Same for `pgrep -f 'script.sh'` in a wait loop: it matches the loop's own shell, so the loop never ends (2026-11-28: every wait ran into its timeout). Use `pgrep -f '[s]cript.sh'`, or wait on the PID. `bench-scene.sh` now stops waiting when the game exits (window closed).
 - Foreground `sleep` in tool calls is blocked; inside scripts it is fine.
+- **`VICTORY_CARD_BUFFERS=0` froze the whole machine** (hard reset, journal lost its last 15 min; 2026-11-28, second run with it). Do not run it again.
 - **`victory-sandbox run --rt` (ray tracing) crashed the user's window manager (Hyprland) on 2026-11-27. Do not run with ray tracing unless the user asks.**
 - Long jobs (builds, warm-up): run in background and wait for the notification; do not poll.
 - Running downloaded scripts (e.g. GE's prep script) was refused once by the auto-mode classifier; the user then explicitly allowed patching/building wineserver. Ask before running other third-party build scripts.
@@ -426,12 +427,29 @@ or what a laggy run does differently (dropped draws at the start).
   and a bad run; trace the draw call site (+caller) of 51ff151f in a good
   run and see what branch skips it in a bad one.
 
+**Heads FIXED (2026-11-28, late):** the cause was the pipeline wait
+budget (`pipeline/make.rs` `wait`). With `VICTORY_PIPELINE_WAIT_SHARED` (on)
+the first thread to wait took the frame's whole remaining budget for the
+length of its wait; any other recording thread meeting an unmade pipeline
+meanwhile saw zero left and dropped its draw/dispatch at once (so even
+`VICTORY_PIPELINE_WAIT_MS=15000` changed nothing). At world entry 63-174
+draws were dropped "being made" per run; in every bad run they included
+compute `7879df3c227ee5ad` (with mesh 09dcdb58, 3d8783a4) in the world's
+first frame, never in a good run: a one-time program whose output the
+head-skin draws depend on for the whole run. Found by putting the shader
+hashes into the 'DROPPED being made' listing lines and diffing good vs bad
+runs (tg-dm*). Now concurrent waiters share one wall-clock deadline: 0
+drops, faces in 6/6 runs (tg-fx*), median unchanged; the 4-program
+`VICTORY_SKIP_PIPELINES` default is removed (3 runs without it: faces,
+median 67-70). Lesson: per-run all-or-nothing picture bugs → look at what
+loading drops.
+
 Still open in the picture: odd lighting, black noise on textures/floors,
 black triangles/planes blinking, checkerboard/comb artifacts.
 
 ## 8. Plan (agreed direction: playable 30 fps first, then picture)
 
-Next steps in order. **When resuming (2026-11-28 onward): first the real fix for the missing heads (section 7c), then the other picture bugs; frame rate after.**
+Next steps in order. **When resuming: the heads are fixed (7c); next the other picture bugs (lighting, black noise, blinking black geometry, checkerboard artifacts); frame rate after.**
 
 1. ~~**Measure the GPU's ~35 ms.**~~ Done, see the step 1 result in section 6: 25-33 ms, title 21-29. Use the GPU timing mode (`VICTORY_GPU_TIMING`; note it forces late wait off, see `late_stage`) or a capture to split title rendering vs our own passes (uploads of card copies ~45 MB/frame, compare passes, texture uploads, ambient/compose). The 8050S has ~2.5× the Series S's compute at similar bandwidth, so the title's own rendering should fit well under 33 ms; if not, look at translated shader cost. This decides whether resolution scale / FSR is worth anything.
 2. ~~**Overlap CPU and GPU.**~~ Measured, see step 2 result: the waits are removable but the CPU is saturated; recording is the critical path. Today preparing (~16 ms idle card), submitting and waiting (~17 ms) are serialized. Goal: frame ≈ max(GPU, CPU) ≈ 35-40 ms. Look at the late-wait/relay machinery (`host.rs` `late_stage`, flights, settles, "waits for every earlier shader write", "submissions sent ahead") for what forces the 17 ms of waits.

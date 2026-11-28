@@ -103,12 +103,16 @@ What was found on the way, measured:
   13.7% of the CPU time in our code, the five recording threads fighting over
   one cache line. `crates/victory-gpu/src/fast_local.rs` reads the TEB slot
   directly.
-- **Missing heads**: most characters were drawn without a head (hair, eyes
-  and teeth floating). Skipping four compute programs that write 16-bit
-  integer buffers before the scene pass brings them back
-  (`VICTORY_SKIP_PIPELINES`, a Linux default for now; faces probably lose
-  their expressions). What those programs compute wrong here is still to be
-  found.
+- **Missing heads**: in about 3 runs out of 4, every character was drawn
+  without the skin of its head (hair, eyes and teeth floating) for the
+  whole run. Cause: the wait for pipelines still being built had one budget
+  per frame that the first waiting thread took whole, so another recording
+  thread meeting a new pipeline at the same moment dropped its work. At
+  world entry that hit a one-time compute program (`7879df3c`) by chance.
+  Now threads waiting at the same time share one deadline
+  (`crates/victory-gpu/src/pipeline/make.rs` `wait`): no draws dropped while
+  pipelines are made, faces in 6 runs out of 6. (The earlier four-program
+  skip was a workaround with no real effect and is gone.)
 - **Indirect light**: with ray tracing off, rooms and faces had only direct
   light; `VICTORY_AMBIENT=1` (the stand-in estimated from the frame) is a
   Linux default now.

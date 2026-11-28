@@ -439,19 +439,40 @@ fn wait(p: &Pending, frame: u64) {
     if budget.is_zero() {
         return;
     }
-    // The frame the budget belongs to, and what was waited of it (or is
-    // taken by a thread waiting now); of the passes over the screen too.
-    static SPENT: [Mutex<(u64, Duration)>; 2] = [const { Mutex::new((u64::MAX, Duration::ZERO)) }; 2];
+    // The frame the budget belongs to, and the wall-clock time spent
+    // waiting in it: `spent` up to `since`, plus the time since then while
+    // `active` threads wait. Threads waiting at the same time share one
+    // deadline, so a frame waits at most `budget` in all, and none of them
+    // finds the budget gone while another waits. (It was taken whole by the
+    // first thread to wait: a thread that needed a pipeline meanwhile
+    // dropped its draw at once. At world entry the title's recording
+    // threads meet new pipelines together; which of them dropped was
+    // chance, and a one-time program dropped in the world's first frame
+    // (7879df3c) left every character without the skin of its head for
+    // the whole run, about 3 runs in 4, 2026-11-28.)
+    struct Spent {
+        frame: u64,
+        spent: Duration,
+        active: u32,
+        since: Instant,
+    }
+    static SPENT: [Mutex<Option<Spent>>; 2] = [const { Mutex::new(None) }; 2];
     let spent_of = &SPENT[usize::from(screen)];
     let shared = shared_budget();
+    let now = Instant::now();
     let left = {
-        let mut spent = spent_of.lock().unwrap_or_else(|e| e.into_inner());
-        if spent.0 != frame {
-            *spent = (frame, Duration::ZERO);
+        let mut guard = spent_of.lock().unwrap_or_else(|e| e.into_inner());
+        let state = guard.get_or_insert(Spent { frame, spent: Duration::ZERO, active: 0, since: now });
+        if state.frame != frame {
+            *state = Spent { frame, spent: Duration::ZERO, active: 0, since: now };
         }
-        let left = budget.saturating_sub(spent.1);
-        if shared {
-            spent.1 += left;
+        let current = if state.active > 0 { state.spent + now.duration_since(state.since) } else { state.spent };
+        let left = budget.saturating_sub(current);
+        if !left.is_zero() && shared {
+            if state.active == 0 {
+                state.since = now;
+            }
+            state.active += 1;
         }
         left
     };
@@ -459,7 +480,7 @@ fn wait(p: &Pending, frame: u64) {
         return;
     }
     let waiting = crate::timeline::span("pipeline: first use waits for a host pipeline");
-    let started = Instant::now();
+    let started = now;
     let (lock, done) = &DONE;
     let mut held = lock.lock().unwrap_or_else(|e| e.into_inner());
     while p.made.get().is_none() {
@@ -481,13 +502,20 @@ fn wait(p: &Pending, frame: u64) {
         );
     }
     {
-        let mut spent = spent_of.lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = spent_of.lock().unwrap_or_else(|e| e.into_inner());
         // A frame that began meanwhile has its own budget.
-        if spent.0 == frame {
+        if let Some(state) = guard.as_mut()
+            && state.frame == frame
+        {
             if shared {
-                spent.1 = spent.1.saturating_sub(left - waited);
+                state.active = state.active.saturating_sub(1);
+                if state.active == 0 {
+                    let end = Instant::now();
+                    state.spent += end.duration_since(state.since);
+                    state.since = end;
+                }
             } else {
-                spent.1 += waited;
+                state.spent += waited;
             }
         }
     }

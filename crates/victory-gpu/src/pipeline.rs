@@ -543,6 +543,15 @@ pub(crate) fn note_drop(this: This) {
             .or_else(|| make::missing(&p.host))
     };
     if let Some(why) = why {
+        // (Which program, in frame listings: the drops while pipelines
+        // are made decide what a run's loading leaves out.)
+        if !this.is_null() && why == "being made" {
+            let p = pipeline(this);
+            crate::capture::op(0, || format!("DROPPED being made: {}", make::hashes(&p.host)));
+            let mut drops = DROPS.lock().unwrap_or_else(|e| e.into_inner());
+            *drops.get_or_insert_with(HashMap::new).entry(why).or_default() += 1;
+            return;
+        }
         note_why(why);
     }
 }
