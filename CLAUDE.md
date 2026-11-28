@@ -376,6 +376,23 @@ close-up; then bump TRANSLATOR_VERSION. Runs end early with "title
 suspended; ending the title" when the game window loses focus.
 Backups: `runtime/state-backup-2026-11-28` (game state).
 
+**Later the same day (after 2ec74d83, warm cache rebuilt for translator
+version 2, disk had been full and broke the first warm-up):** the current
+code is equivalent to the pre-d583dc23 build, yet warm runs are headless
+(prison inmate at world+30, frame shots-fixed/frame-1053.png; last night's
+shots-skipface/frame-1016.png had a face). In-run fresh translations
+(`VICTORY_SHADER_KEY=source`) looked headless too. **Skipping all 20 compute
+programs of the face list** (list 0x1160d980 in frame-1152-ops: 6a04b371,
+7de0f9db, a06ef094, 7a38ed7f, 5e5d98e4, 0709e835, f8425d3c, 6b176df5,
+d4bc6660, 164a8fa9, 13c8daa0, 7dfd9a07, e8820cb2, b22a16a1, aaf7da7a,
+7933a53d, 3d65925d, 21e30428, 0aa79340, da2fdff4): the hoodie protagonist
+is still headless. So the face network is not (only) the cause; the
+4-program skip default has no reliable effect, and the runs with faces
+(laggy ones) point at timing (pipelines still compiling, draws dropped or
+data not yet there). Next: the head draws themselves (mesh shaders reading
+the 24 MB buffer: ba8d52f4, f2b41c69, 4f23fd8d; their inputs and outputs),
+or what a laggy run does differently (dropped draws at the start).
+
 Still open in the picture: odd lighting, black noise on textures/floors,
 black triangles/planes blinking, checkerboard/comb artifacts.
 
