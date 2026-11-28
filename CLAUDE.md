@@ -393,6 +393,39 @@ data not yet there). Next: the head draws themselves (mesh shaders reading
 the 24 MB buffer: ba8d52f4, f2b41c69, 4f23fd8d; their inputs and outputs),
 or what a laggy run does differently (dropped draws at the start).
 
+**Heads, what is established (2026-11-28, evening; runs rep*, rep2-*, tg-*):**
+- Random per run with identical code and settings: about 1 run in 4-5 has
+  all faces (rep-cur1 good / rep-cur2 bad, same build). Every single-run
+  conclusion of the day before this was noise: the 4-program skip, the
+  d583dc23 'regression', the TLS idea. Judge only over several runs.
+- In bad runs **the title does not issue the head-skin draws at all**:
+  frame world+30 (inmate close-up), good run tg-t2 vs bad tg-t1/t3/t4:
+  mesh 51ff151f+pixel 7fe75645 (2x), mesh fd3e0589+pixel efc089fe (2x),
+  mesh 6e94bb01+pixel 5ab0067a (1x) are drawn only in the good run; in the
+  bad ones their pipelines exist and are bound in other frames, nothing is
+  dropped. G-buffer dumps (VICTORY_DUMP_TARGETS): good: face in the colour
+  target, head in normals and the material target; bad: a flat dark blob
+  in colour, head absent from the other targets (eyes, teeth, hair drawn).
+  So a CPU-side decision of the title, not shading.
+- Not the cause (each over 2-5 runs): face network (all 20 programs
+  skipped), translation of its programs (exact on RADV), late wait /
+  async (VICTORY_LATE_WAIT=0), card copies, card steps, a barrier after
+  every dispatch, the title's GPU time (VICTORY_TITLE_GPU_MS=10), the
+  bake's upload budget (VICTORY_BAKE_TEXTURES_MS=600000) and
+  VICTORY_TEXTURE_NO_WAIT=0, sound, streaming/dstorage counters (same),
+  log warnings (same kinds).
+- The bake (heads' skin decorations, at load): draws d126bcae/fcee6129/
+  c0a7fe77 into 2048x2048 targets, dc33a831 copies, 88994c34/13dfdd3b
+  make levels, 95988cc1 BC-encodes into R32G32B32A32_UINT scratch textures
+  (32x32 with 6 levels, 1x1), then CopyTextureRegion into 128x128 BC3
+  (f78) textures. Those hold data right after (VICTORY_DUMP_BAKES=1, log
+  'its first level's bytes'); no title-filled texture overlaps them.
+- Next: find what the title's CPU checks before drawing a head (a fence or
+  value it polls, a readback, an asset state). Ideas: VICTORY_READ_WATCH on
+  the bake's outputs; compare the title's fence waits/values between a good
+  and a bad run; trace the draw call site (+caller) of 51ff151f in a good
+  run and see what branch skips it in a bad one.
+
 Still open in the picture: odd lighting, black noise on textures/floors,
 black triangles/planes blinking, checkerboard/comb artifacts.
 

@@ -609,6 +609,35 @@ pub(crate) fn placed_in_host_written(address: u64, desc: &[u32; 14]) {
     }
 }
 
+/// Diagnostics: `resource` is about to be filled from title memory that lies
+/// in the memory of another texture the host copied into (the bake's BC3
+/// textures: CLAUDE.md, heads). Said once per pair of descriptions (width,
+/// height, layers and levels, format; the filled one first).
+#[cfg(feature = "diagnostics")]
+fn filled_over_host_written(resource: This) {
+    let Some((at, desc)) = crate::resource::texture_memory(resource) else { return };
+    let at = at as u64;
+    // SAFETY: 56 bytes in the description's layout.
+    let w = unsafe { std::ptr::from_ref(&desc).cast::<[u32; 14]>().read_unaligned() };
+    let hit = {
+        let map = HOST_WRITTEN_AT.lock().unwrap_or_else(|e| e.into_inner());
+        map.range(..=at).next_back().filter(|(a, d)| at < **a + d.0 && d.5 != resource as usize).map(|(a, d)| (*a, *d))
+    };
+    let Some((copied_at, (_, cw, ch, cl, cf, copied))) = hit else { return };
+    static SAID: Mutex<Option<std::collections::BTreeSet<[u32; 9]>>> = Mutex::new(None);
+    let key = [w[4], w[6], w[7], w[8], cw, ch, cl, cf, u32::from(copied_at == at)];
+    if SAID.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert_with(Default::default).insert(key) {
+        tracing::warn!(
+            filled = ?resource,
+            copied = format_args!("{copied:#x}"),
+            offset = at - copied_at,
+            "a texture filled from title memory lies in a texture the host copied into (width, height, layers and levels, format): filled {:?}, copied {:?}",
+            [w[4], w[6], w[7], w[8]],
+            [cw, ch, cl, cf]
+        );
+    }
+}
+
 /// Whether the host GPU wrote `resource` by a copy or resolve
 /// ([`host_written`]): its host copy cannot be made again from title
 /// memory.
@@ -740,6 +769,8 @@ pub(crate) fn upload_from(list: &HostList, resource: This, first: u32) {
     if host_written {
         return;
     }
+    #[cfg(feature = "diagnostics")]
+    filled_over_host_written(resource);
     // Once a list for each first level; not again for one that the list's
     // upload of larger ones held too.
     if !list.first_use(1 << 63 | (resource as usize) << 4 | first as usize & 15) {
@@ -1835,6 +1866,8 @@ pub(crate) fn mapped_bytes(at: *const u8, len: usize) -> u64 {
 
 /// The staging state of a title texture, made on first use.
 fn staging(resource: This, copy: &crate::resource::HostTexture, first: u32) -> Option<Arc<Staging>> {
+    #[cfg(feature = "diagnostics")]
+    filled_over_host_written(resource);
     let texture = &copy.texture;
     // Asked before the table is locked: the sweep lets go of a staging
     // buffer with its texture's host side locked, in that order.
