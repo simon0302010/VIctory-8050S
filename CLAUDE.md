@@ -354,6 +354,28 @@ scene pass is all mesh shaders; grep the ops for views of format 12/57.
   between runs. The skip workaround's premise is not reproduced: the
   four programs may be innocent.
 
+**The shader cache hid translator changes (2026-11-28, important):**
+translations are keyed by `victory_shader::TRANSLATOR_VERSION`, which has
+been 1 since 1162d38f (11-26 00:18) and was never bumped, so every run
+served translations made by whatever older translator build first met a
+shader (the merges of 11-26, d583dc23, ...). Last night's "heads with the
+skip" run (shots-skipface, 00:24) used such a mix. Today the exact same
+code (4e3fe1ad rebuilt) and command were headless, and after one run with
+`VICTORY_SHADER_FRESH=1` (re-translates and *overwrites* old-build entries)
+the picture got worse (the two men at the start, always fine before, got
+block heads; user). So the current translator is worse than some older
+build whose entries were lost. Not the cause: d583dc23's table lookup
+(`VICTORY_D16_TABLES=0`, now a switch and part of the cache key: still
+headless), card copies, card steps, a UAV barrier after every dispatch,
+sound. The title's 164a8fa9/13c8daa0 compute right on RADV (test
+`face_network_elementwise_programs_compute_on_halves`). Next: bisect the
+translator with `VICTORY_SHADER_KEY=source` (a separate cache set per
+build, the main set untouched) over the victory-shader commits since
+11-25, judging the two men at the start (world+80..300) and the diner
+close-up; then bump TRANSLATOR_VERSION. Runs end early with "title
+suspended; ending the title" when the game window loses focus.
+Backups: `runtime/state-backup-2026-11-28` (game state).
+
 Still open in the picture: odd lighting, black noise on textures/floors,
 black triangles/planes blinking, checkerboard/comb artifacts.
 

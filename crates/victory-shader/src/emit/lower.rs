@@ -8192,7 +8192,7 @@ impl<'a> Lower<'a> {
     /// shots-warmbad, 2026-11-27; the test `stride_tests`
     /// `d16_typed_buffer_accesses_pass_bits_through_integer_views`).
     fn integer_view(&mut self, src: &Source) -> Result<Option<(V, V)>, Why> {
-        let Some(word) = self.slot_word(src, true)? else {
+        let Some(word) = self.slot_word(src, tables_on())? else {
             return Ok(None);
         };
         let c = self.cur;
@@ -14129,4 +14129,13 @@ mod tests {
         // A 16-bit float is a half already, sign included.
         assert_eq!(half(0xBC00 << half_shift(16)), -1.0);
     }
+}
+
+/// Whether d16 typed accesses through views in descriptor tables read the
+/// view-stride table for the view's format kind (d583dc23).
+/// `VICTORY_D16_TABLES=0` turns it off (diagnostics of a regression: with it
+/// on and fresh translations the picture got worse, 2026-11-28).
+fn tables_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_D16_TABLES").is_none_or(|v| v != "0"))
 }
