@@ -330,6 +330,29 @@ WaveActiveSum of halves), and whether they read title memory our refresh
 leaves stale. How it was found: frame-1036-ops.txt of shots-warmbad, the
 scene pass is all mesh shaders; grep the ops for views of format 12/57.
 
+**Heads, 2026-11-28 session 2 (commit `e3cf0517`, tool `VICTORY_BUFDUMP`):**
+- `VICTORY_BUFDUMP=<hashes>` + `VICTORY_CAPTURE`: buffer views those
+  programs bind are read back at captured frames (`frame-<n>-buf-*.bin` +
+  summary line; `crates/victory-gpu/src/bufdump.rs`). The summary's
+  "NaN as halves" means nothing for UINT data (0xFFFF/0x7FFF are small
+  ints). Run `runtime/logs/bufdump-1795855263`: 6a04b371, 164a8fa9 and
+  13c8daa0 all write the same 24 MB buffer at 0xc6da60000 (a scratch
+  heap: triangle indices at +0x80000, float32 positions at +0x200000,
+  float32 pairs with noisy low 16 bits at +0x10c0000). The 24 MB buffer is
+  also read by mesh shaders ba8d52f4/f2b41c69/4f23fd8d (head draw
+  candidates). da2fdff4 writes other buffers (0x1bd9e0000 etc.) and runs
+  only a few frames (not every frame). 6a04b371's u6 is a placed R8G8B8A8
+  texture SRV at 0x9bfe0000, not a FLOAT UAV as noted above.
+- Screenshot bisection (`VICTORY_CAPTURE_WORLD_ALSO=300,320`, the intro
+  diner scene, waitress close-up at world+300): skip only 6a / only
+  164+13c / only da2 / all but da2 / all but 6a: all headless. **Control
+  with all four skipped (the Linux default) is headless too** (run
+  `bisect-control-all4-1795856953`, frames 1300/1320: hair, teeth, eyes
+  float). So in this scene the skip does not help; the user's "heads come
+  back" was seen elsewhere in game (where? ask), or heads are flaky
+  between runs. The skip workaround's premise is not reproduced: the
+  four programs may be innocent.
+
 Still open in the picture: odd lighting, black noise on textures/floors,
 black triangles/planes blinking, checkerboard/comb artifacts.
 
