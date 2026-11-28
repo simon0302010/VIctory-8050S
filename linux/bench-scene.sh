@@ -24,6 +24,8 @@ runner=$!
 in_game() { grep -cE 'INFO.*victory_gpu::host.* fps, .* [0-9]{3,} draws/frame' "$1" 2>/dev/null; true; }
 log=""
 for _ in $(seq 1 200); do
+    # The game ended (window closed, crash): stop waiting.
+    kill -0 "$runner" 2>/dev/null || break
     now=$(cat "$logs/latest.txt" 2>/dev/null)
     if [ "$now" != "$old" ]; then
         log=$logs/$now

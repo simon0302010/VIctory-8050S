@@ -79,6 +79,7 @@ VICTORY_X=1 linux/bench-scene.sh ...  # extra switches come from the environment
 ## 4. Traps (learned the hard way)
 
 - **Never `pkill -f 'victory.exe run'`**: it matches the calling shell's own command line and kills the tool call (exit 144). Use `pkill -f '[v]ictory.exe run'`.
+- Same for `pgrep -f 'script.sh'` in a wait loop: it matches the loop's own shell, so the loop never ends (2026-11-28: every wait ran into its timeout). Use `pgrep -f '[s]cript.sh'`, or wait on the PID. `bench-scene.sh` now stops waiting when the game exits (window closed).
 - Foreground `sleep` in tool calls is blocked; inside scripts it is fine.
 - **`victory-sandbox run --rt` (ray tracing) crashed the user's window manager (Hyprland) on 2026-11-27. Do not run with ray tracing unless the user asks.**
 - Long jobs (builds, warm-up): run in background and wait for the notification; do not poll.
