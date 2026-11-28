@@ -54,7 +54,12 @@ impl<T: 'static> FastLocal<T> {
         let new = unsafe { TlsAlloc() };
         assert_ne!(new, NONE, "no TLS index left");
         match self.key.compare_exchange(NONE, new, Ordering::AcqRel, Ordering::Acquire) {
-            Ok(_) => new,
+            Ok(_) => {
+                if new >= 64 {
+                    tracing::info!(index = new, "a thread-local of ours past the TEB's 64 slots (read through TlsGetValue)");
+                }
+                new
+            }
             Err(other) => {
                 // SAFETY: our index, not handed out.
                 unsafe { TlsFree(new) };
@@ -207,19 +212,17 @@ fn slot(key: u32) -> *mut core::ffi::c_void {
             );
         }
     } else {
-        let expansion: *const *mut core::ffi::c_void;
-        // SAFETY: as above.
-        unsafe {
-            std::arch::asm!(
-                "mov {v}, gs:[0x1780]",
-                v = out(reg) expansion,
-                options(nostack, readonly, preserves_flags),
-            );
-            if expansion.is_null() {
-                return std::ptr::null_mut();
-            }
-            value = *expansion.add(key as usize - 64);
-        }
+        // Indices past the TEB's 64 go through `TlsGetValue`: reading
+        // `TlsExpansionSlots` (gs:0x1780) ourselves gave null on this stack
+        // (Wine, the title's threads), so a key there read as unset at every
+        // access, a fresh value each time, and what was set in it was lost.
+        // Keys are handed out in first-use order, so which local landed
+        // there changed with timing and with every local added: characters'
+        // heads came and went from run to run (2026-11-28; adding one
+        // fast_local, bufdump's, made them vanish in every run).
+        use windows_sys::Win32::System::Threading::TlsGetValue;
+        // SAFETY: an index of ours.
+        value = unsafe { TlsGetValue(key) };
     }
     value
 }

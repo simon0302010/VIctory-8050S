@@ -225,8 +225,22 @@ static BAKE_SERVED: AtomicU64 = AtomicU64::new(0);
 /// `PS_BakeDecorations_*`), by the first 16 hex digits of their hash as the
 /// frame listings print it. They draw into a 256x256 corner of 2048x2048
 /// targets and name no texture in a table.
-const BAKE_PIXEL_SHADERS: [&str; 4] =
-    ["c0a7fe77b1862e10", "0d1575a396dfe513", "b7cfd8dda91ebb6b", "280967ad158cee0b"];
+///
+/// d126bcae and fcee6129 draw with vertex shader 089d6271 (as 280967ad
+/// does) into the same 2048x2048 targets while characters load: the
+/// skin of their heads. Without the pass ahead of them, whether their
+/// sources were on the card was chance, once per run: in most runs the
+/// heads' skin came out black in the colour target (hair, eyes and teeth
+/// fine, run targets-1795866511, frame 1023, target 06), in some all
+/// heads were right (2026-11-28).
+const BAKE_PIXEL_SHADERS: [&str; 6] = [
+    "c0a7fe77b1862e10",
+    "0d1575a396dfe513",
+    "b7cfd8dda91ebb6b",
+    "280967ad158cee0b",
+    "d126bcae5d5d8d26",
+    "fcee612943c008e0",
+];
 
 /// Since the start: early runs of the texture pass, and those of them
 /// made for a bake draw.
@@ -2139,6 +2153,10 @@ impl State {
         }
         let bake = bake_ms > 0
             && p.stages.iter().any(|s| BAKE_PIXEL_SHADERS.contains(&s.shader.hash.as_str()));
+        #[cfg(feature = "diagnostics")]
+        if bake {
+            crate::capture::bake_drawn();
+        }
         static FRAME: AtomicU64 = AtomicU64::new(u64::MAX);
         // The milliseconds this frame's bake draws have taken so far: a
         // frame has several, and together they get `bake_ms`.

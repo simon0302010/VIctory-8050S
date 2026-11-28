@@ -1485,6 +1485,69 @@ fn textures() -> std::sync::MutexGuard<'static, std::collections::BTreeSet<usize
 static TARGETS_AT: std::sync::Mutex<std::collections::BTreeMap<u64, usize>> =
     std::sync::Mutex::new(std::collections::BTreeMap::new());
 
+/// Diagnostics: textures the title makes at the address of another one of
+/// another kind, one of them written by the host and the other filled from
+/// title memory (what shaders write into the first never reaches the
+/// second): each pair of kinds (width, height, format, levels; the written
+/// one first) is said once.
+#[cfg(all(windows, feature = "diagnostics"))]
+fn note_same_memory(desc: &ResourceDesc, at: u64, filled: bool) {
+    type Kind = (u64, u32, u32, u16);
+    // By start address: (end, kind, filled).
+    static RANGES: std::sync::Mutex<std::collections::BTreeMap<u64, (u64, Kind, bool)>> =
+        std::sync::Mutex::new(std::collections::BTreeMap::new());
+    static SAID: std::sync::Mutex<std::collections::BTreeSet<(Kind, Kind, bool)>> =
+        std::sync::Mutex::new(std::collections::BTreeSet::new());
+    let Some(size) = footprint(desc).map(|i| i.size) else { return };
+    let end = at + size.max(1);
+    let kind: Kind = (desc.width, desc.height, desc.format, desc.mip_levels);
+    let mut all = RANGES.lock().unwrap_or_else(|e| e.into_inner());
+    // Ranges starting below `end` that reach past `at` (the largest are a
+    // few hundred MB: look back over the last 64 starts).
+    let hits: Vec<(u64, u64, Kind)> = all
+        .range(..end)
+        .rev()
+        .take(64)
+        .filter(|(start, (e, k, f))| *e > at && *f != filled && *k != kind && **start < end)
+        .map(|(start, (e, k, _))| (*start, *e, *k))
+        .collect();
+    for (start, other_end, other) in hits {
+        let exact = start == at;
+        let pair = if filled { (other, kind, exact) } else { (kind, other, exact) };
+        let mut said = SAID.lock().unwrap_or_else(|e| e.into_inner());
+        if said.len() < 300 && said.insert(pair) {
+            let (w_at, w_end, f_at) = if filled { (start, other_end, at) } else { (at, end, start) };
+            tracing::warn!(
+                written_at = format_args!("{w_at:#x}"),
+                written_bytes = w_end - w_at,
+                filled_at = format_args!("{f_at:#x}"),
+                "a texture the host writes and one filled from title memory overlap (width, height, format, levels): written {:?}, filled {:?}",
+                pair.0,
+                pair.1
+            );
+        }
+    }
+    // The bake's block textures (CLAUDE.md: heads): where they are and what
+    // lies around them.
+    if desc.format == 3 && (kind.0 == 32 || kind.0 == 1) {
+        static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        if N.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 40 {
+            let near: Vec<String> = all
+                .range(..end)
+                .rev()
+                .take(64)
+                .filter(|(_, (e, _, _))| *e > at)
+                .map(|(s, (e, k, f))| format!("{s:#x}+{:#x} {k:?} filled={f}", e - s))
+                .collect();
+            tracing::info!(address = format_args!("{at:#x}"), bytes = size, ?kind, filled, flags = desc.flags, ?near, "a block texture of the bake (R32G32B32A32_UINT) made");
+        }
+    }
+    all.insert(at, (end, kind, filled));
+    if all.len() > 1 << 20 {
+        all.clear();
+    }
+}
+
 /// For `this`, a texture made for a view the title placed in memory
 /// ([`texture_at`]): the title texture the host writes that lies in the
 /// same memory, if there is one of the same size, levels and layers with
@@ -2812,6 +2875,8 @@ fn hand_out_resource(
                 .unwrap_or_else(|e| e.into_inner())
                 .insert(resource.data() as u64, at);
         }
+        #[cfg(feature = "diagnostics")]
+        note_same_memory(&desc, resource.data() as u64, fills(&desc));
         if !lazy() {
             let _ = hosted(at as This, true);
         }

@@ -844,7 +844,11 @@ impl Written {
                 let now = (elapsed.as_nanos() / (1_000_000_000 / u128::from(TIMESTAMP_FREQUENCY))) as u64;
                 #[cfg(all(windows, feature = "diagnostics"))]
                 crate::host::spans::stamped(at as usize, now);
-                as_loaded(now, at as usize, gpu_load())
+                let value = as_loaded(now, at as usize, gpu_load());
+                let value = fixed_span(at as usize, value);
+                #[cfg(feature = "diagnostics")]
+                title_span(at as usize, value);
+                value
             }
             Written::SystemTimestamp => system_timestamp(),
         };
@@ -859,6 +863,87 @@ impl Written {
             }
         }
     }
+}
+
+/// `VICTORY_TITLE_GPU_MS=<ms>`: every timestamp pair of the title (the end at
+/// a 16-byte boundary, the start 8 bytes after it) reads as that much GPU
+/// time. Without it the pairs span our whole submission line, 65-130 ms a
+/// frame (up to 250), on a title made for 33 (2026-11-28), and a title
+/// that scales its work by its GPU time sees an overloaded GPU. When the
+/// second of a pair is written, the start is made `ms` before the end
+/// (rewritten in place if it came first).
+fn fixed_span(at: usize, value: u64) -> u64 {
+    static MS: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+    let Some(ticks) = *MS.get_or_init(|| {
+        std::env::var("VICTORY_TITLE_GPU_MS").ok().and_then(|v| v.trim().parse::<u64>().ok()).map(|ms| ms * (TIMESTAMP_FREQUENCY / 1000))
+    }) else {
+        return value;
+    };
+    static ENDS: std::sync::Mutex<std::collections::BTreeMap<usize, u64>> = std::sync::Mutex::new(std::collections::BTreeMap::new());
+    let mut ends = ENDS.lock().unwrap_or_else(|e| e.into_inner());
+    let base = at & !15;
+    if at & 8 != 0 {
+        // The start: before its end if that is written already.
+        match ends.remove(&base) {
+            Some(end) => end.saturating_sub(ticks).max(1),
+            None => {
+                ends.insert(base | 8, value);
+                value
+            }
+        }
+    } else {
+        // The end: a start written before it is moved to `ms` before.
+        if ends.remove(&(base | 8)).is_some() {
+            // SAFETY: the title's timestamp memory, written a moment ago.
+            unsafe { ((base + 8) as *mut u64).write_unaligned(value.saturating_sub(ticks).max(1)) };
+            #[cfg(feature = "diagnostics")]
+            title_span(base + 8, value.saturating_sub(ticks).max(1));
+        } else {
+            ends.insert(base, value);
+        }
+        if ends.len() > 4096 {
+            ends.clear();
+        }
+        value
+    }
+}
+
+/// Diagnostics: the GPU time the title reads from its timestamp pairs (the
+/// end at a 16-byte boundary, the start 8 bytes after it), as it computes
+/// it: end minus start, once both of a pair were written. Summed for the
+/// frame-rate line ([`take_title_spans`]).
+#[cfg(feature = "diagnostics")]
+static TITLE_SPANS: std::sync::Mutex<(std::collections::BTreeMap<usize, (u64, u64)>, u64, u64, u64)> =
+    std::sync::Mutex::new((std::collections::BTreeMap::new(), 0, 0, 0));
+
+#[cfg(feature = "diagnostics")]
+fn title_span(at: usize, value: u64) {
+    let mut s = TITLE_SPANS.lock().unwrap_or_else(|e| e.into_inner());
+    let pair = s.0.entry(at & !15).or_insert((0, 0));
+    if at & 8 != 0 {
+        pair.1 = value;
+    } else {
+        pair.0 = value;
+    }
+    let (end, start) = *pair;
+    if end != 0 && start != 0 {
+        s.0.remove(&(at & !15));
+        let span = end.saturating_sub(start);
+        s.1 += 1;
+        s.2 += span;
+        s.3 = s.3.max(span);
+    }
+}
+
+/// Diagnostics: pairs completed since the last call, their mean and longest
+/// span in ms.
+#[cfg(feature = "diagnostics")]
+pub(crate) fn take_title_spans() -> Option<(u64, f64, f64)> {
+    let mut s = TITLE_SPANS.lock().unwrap_or_else(|e| e.into_inner());
+    let (n, sum, most) = (s.1, s.2, s.3);
+    (s.1, s.2, s.3) = (0, 0, 0);
+    let ms = |t: u64| t as f64 / (TIMESTAMP_FREQUENCY / 1000) as f64;
+    (n > 0).then(|| (n, ms(sum) / n as f64, ms(most)))
 }
 
 /// What the title's GPU time is made to look like, in ticks

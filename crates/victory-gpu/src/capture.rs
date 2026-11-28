@@ -47,7 +47,28 @@ pub(crate) fn listed(n: u64) -> bool {
     });
     let first = WORLD.load(std::sync::atomic::Ordering::Relaxed);
     let after = n.wrapping_sub(first);
-    named || first != u64::MAX && ([2, 6, 30, 80].contains(&after) || also.contains(&after))
+    named || first != u64::MAX && ([2, 6, 30, 80].contains(&after) || also.contains(&after)) || bake_frame(n)
+}
+
+/// `VICTORY_DUMP_BAKES=1`: the first 8 frames with a draw of the title's
+/// bake are listed too (from that draw on), whichever they are.
+static BAKE_FRAMES: std::sync::Mutex<Vec<u64>> = std::sync::Mutex::new(Vec::new());
+
+fn bake_frame(n: u64) -> bool {
+    BAKE_FRAMES.lock().unwrap_or_else(|e| e.into_inner()).contains(&n)
+}
+
+/// A draw of the title's bake is being recorded.
+pub(crate) fn bake_drawn() {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if !*ON.get_or_init(|| std::env::var_os("VICTORY_DUMP_BAKES").is_some_and(|v| v == "1")) {
+        return;
+    }
+    let frame = crate::queue::presented() + 1;
+    let mut frames = BAKE_FRAMES.lock().unwrap_or_else(|e| e.into_inner());
+    if frames.len() < 8 && !frames.contains(&frame) {
+        frames.push(frame);
+    }
 }
 
 /// With a capture folder, for the frames [`listed`]: `what` is added to
@@ -469,7 +490,26 @@ fn dump_one(
             );
             save_as(&name, f.Width, f.Height, f.Width as usize * 4, false, &rgba);
         } else {
-            tracing::info!(format = f.Format.0, ?resource, "target not dumped: format");
+            // What it holds, at least: the share of bytes that are not zero
+            // (the bake's block textures and the BC3 textures it copies
+            // into: CLAUDE.md, heads).
+            let mut nonzero = 0usize;
+            let mut total = 0usize;
+            for y in 0..f.Height as usize {
+                let row = &rows[y * pitch..y * pitch + (pitch.min(rows.len() - y * pitch))];
+                total += row.len();
+                nonzero += row.iter().filter(|&&b| b != 0).count();
+            }
+            tracing::info!(
+                frame,
+                format = f.Format.0,
+                ?resource,
+                width = d.Width,
+                height = d.Height,
+                nonzero,
+                total,
+                "target not dumped as a picture (format); its first level's bytes"
+            );
         }
         buffer.Unmap(0, None);
     }

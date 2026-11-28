@@ -9371,6 +9371,13 @@ impl Meter {
             rec::line(frames);
             #[cfg(feature = "diagnostics")]
             spans::line(frames);
+            #[cfg(feature = "diagnostics")]
+            if let Some((pairs, mean, most)) = crate::queue::take_title_spans() {
+                tracing::info!(
+                    "the title's GPU time as its timestamp pairs say: {:.1} pairs a frame, {mean:.2} ms each on average, the longest {most:.2} ms",
+                    pairs as f64 / frames
+                );
+            }
             crate::shadow::back_line(frames);
             #[cfg(feature = "diagnostics")]
             split_line(frames);
